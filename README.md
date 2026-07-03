@@ -24,6 +24,17 @@ drift, or prompt/tool XML leaking into replies, start with
 [`AGENT_GARBLE_FIX.md`](AGENT_GARBLE_FIX.md). The fix path keeps the C12 NVFP4
 profile; it does not switch production to fp8 or a smaller fallback model.
 
+> **Still getting gibberish after the fix below? → go fp8.** If gibberish /
+> multilingual (Chinese / BOS) salad persists **after** applying the sampling and
+> spec-decode fixes, the most reliable fix is to switch the KV cache from 4-bit
+> `nvfp4_ds_mla` to `fp8` and run Aiden Le's `production-3.2` image — see the FP8
+> build:
+> [**DeepSeek-v4-Flash-Official-vLLM-DSpark-NVFP4-2x-DGX-Spark**](https://github.com/tonyd2wild/DeepSeek-v4-Flash-Official-vLLM-DSpark-NVFP4-2x-DGX-Spark).
+> The 4-bit KV can collapse into salad under long, heavy agentic context; fp8 KV
+> stays clean (Aiden serves 500K context on fp8). Keep this NVFP4 repo's path when
+> you need the 1.5M-token context; use the fp8 build when clean output under
+> concurrency matters more than max context.
+
 ## Garble fix (2026-07-03)
 
 **Symptom.** On a cold server, the *first* prompt of a brand-new session — fired
