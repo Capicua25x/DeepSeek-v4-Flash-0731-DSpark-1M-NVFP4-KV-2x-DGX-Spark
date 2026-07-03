@@ -63,6 +63,30 @@ garbled ours), and **verified live under concurrency on 2026-07-03** across two
 independent TP=2 instances: four concurrent fresh-session first-prompts per
 instance, all clean — zero tool-call dumps, zero salad.
 
+### Verified results and gotchas (2026-07-03)
+
+**`VLLM_USE_B12X_MOE=1` is essential — this one env var is the entire speed
+difference.** With `=1` the boot log reads `Using 'B12X' Mxfp4 MoE backend` and
+decode runs at the full ~50-60+ tok/s. Setting it to `0` silently falls back to
+the `DEEPGEMM_MXFP4` MoE path and tanks decode to ~29 tok/s. Keep it `1`.
+
+**The garble fix costs ~zero speed.** Head-to-head on identical hardware, nvfp4
+4-bit KV, 300K context, code workload: the original greedy-draft config measured
+`61.8 tok/s` and the fixed probabilistic-draft config measured `61.3 tok/s` —
+statistically identical, and only the fixed one is garble-free under concurrency.
+Decode speed is workload-dependent because DSpark spec-decode acceptance varies
+with the text: code ~61 tok/s, technical ~40 tok/s, essay ~31 tok/s. The "50-60"
+figure is the code/agent number, not a flat rate.
+
+**Image-compat notes for the `dspark-nvfp4-stage-c`-class image:**
+
+- Do **not** pass Aiden's `--attention-backend FLASHINFER_MLA_SPARSE_DSV4`; that
+  backend name does not exist on this image (`ValueError: unknown backend`).
+  Leave the attention backend on AUTO — it selects the DeepSeek-V4 sparse MLA
+  path that works with `nvfp4_ds_mla`.
+- Do **not** set `VLLM_USE_V2_MODEL_RUNNER=1`; it is incompatible with DSpark
+  speculative decoding (hard reject at startup). Keep it unset (`0`).
+
 ## Result
 
 ### 2026-07-02 Keys C12 1.5M NVFP4 Checkpoint
