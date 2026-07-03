@@ -24,6 +24,45 @@ drift, or prompt/tool XML leaking into replies, start with
 [`AGENT_GARBLE_FIX.md`](AGENT_GARBLE_FIX.md). The fix path keeps the C12 NVFP4
 profile; it does not switch production to fp8 or a smaller fallback model.
 
+## Garble fix (2026-07-03)
+
+**Symptom.** On a cold server, the *first* prompt of a brand-new session — fired
+under concurrency (several fresh sessions hitting the endpoint at once) — dumps
+tool-call fragments / skill XML / parse-broken junk, then the same session
+recovers and answers cleanly on later turns. Long or heavy sessions could also
+drift into BOS or multilingual salad.
+
+**Root cause.** This is a DSpark speculative-decoding **cold-start draft/target
+mismatch**, not a sampling problem. Our spec-config used a **greedy draft**
+(`draft_sample_method` was unset, so it defaulted to greedy). At a cold,
+concurrent first batch the greedy draft distribution diverges from the target
+model, and the accepted tokens come out as corrupted tool-call fragments that
+reach the tool parser as garbage. It was compounded by `num_speculative_tokens=5`
+(a larger mismatch window) and by not pinning `--max-cudagraph-capture-size` (the
+concurrent first batch hit an uncaptured CUDA graph). Separately, the old
+`--override-generation-config` carried `repetition_penalty=1.05`, which is a
+documented DSpark spec-decode **crash risk** (illegal memory access), not a fix.
+
+**Fix.** Five changes. They keep `--kv-cache-dtype nvfp4_ds_mla`, the 1.5M
+context, `max_num_seqs`, TP, and the RoCE/NCCL/fabric config untouched:
+
+1. **Spec-config → `{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic"}`.**
+   This is the key change: a probabilistic draft matches the target distribution,
+   and 3 tokens shrinks the cold-start mismatch window (was greedy draft with 5).
+2. **`--max-cudagraph-capture-size` set equal to `--max-num-seqs`** so the first
+   concurrent batch hits a captured graph instead of wedging on capture.
+3. **`--async-scheduling` and `--enable-chunked-prefill`.**
+4. **Env `VLLM_USE_FLASHINFER_SAMPLER=1` and `VLLM_DSPARK_REPLICATE_MARKOV_W1=1`.**
+5. **Removed `--override-generation-config`** (kills the `repetition_penalty`
+   crash risk). `--generation-config vllm` is kept; no sampling override is added,
+   and explicit client request parameters still win.
+
+Diagnosed by comparing this launch against Aiden's clean `production-3.2` DSpark
+recipe (which stayed clean under the same oh-my-pi + Hermes concurrency that
+garbled ours), and **verified live under concurrency on 2026-07-03** across two
+independent TP=2 instances: four concurrent fresh-session first-prompts per
+instance, all clean — zero tool-call dumps, zero salad.
+
 ## Result
 
 ### 2026-07-02 Keys C12 1.5M NVFP4 Checkpoint
@@ -292,30 +331,18 @@ On this deployment there are three checks to make before blaming the weights:
    DSpark overlay. A reused local tag named `vllm-dspark-runtime:clean` caused
    misleading failures even though a nearby PR-head image worked. Rebuild from
    the intended overlay commit when in doubt.
-3. **Decode/fallback safety:** for long OpenAI-compatible agent prompts, avoid
-   unstable sampling and hidden fallback transitions. The server default should
-   ignore the model card's sampling defaults and apply a small sampling floor:
-
-```json
-{
-  "temperature": 0.6,
-  "top_p": 0.95,
-  "top_k": 40,
-  "repetition_penalty": 1.05,
-  "include_reasoning": false,
-  "reasoning_effort": "none",
-  "chat_template_kwargs": {
-    "thinking": false,
-    "enable_thinking": false
-  }
-}
-```
-
-The compose launcher now includes `--generation-config vllm`, builds
-`--override-generation-config` from the `GENERATION_*` env values, and sets
-`thinking=false` so default requests do not inherit unstable model-card sampling.
-Explicit client request parameters still win. For exact deterministic curl
-checks, send `temperature: 0` in the request body.
+3. **Decode safety (updated 2026-07-03):** do **not** apply a server-side
+   `repetition_penalty` on the DSpark speculative-decode path — it is a documented
+   spec-decode crash risk (illegal memory access), and it is not what fixes the
+   garble. The actual cold-start garble fix is the DSpark spec-config change
+   (`draft_sample_method=probabilistic`, `num_speculative_tokens=3`) plus
+   `--max-cudagraph-capture-size == --max-num-seqs`; see
+   [Garble fix (2026-07-03)](#garble-fix-2026-07-03). The compose launcher runs
+   with `--generation-config vllm`, **no** `--override-generation-config`, and
+   `--default-chat-template-kwargs '{"thinking":false}'` so default requests do not
+   inherit unstable model-card sampling. Explicit client request parameters still
+   win. For exact deterministic curl checks, send `temperature: 0` in the request
+   body.
 
 Also clear agent fallback lists during validation. A model that looks fixed in
 direct vLLM tests can still appear poisoned if the orchestration layer silently
@@ -443,14 +470,13 @@ Keep these agent-serving defaults unless you are deliberately experimenting:
 - `MAX_MODEL_LEN=1500000`
 - `MAX_NUM_SEQS=12`
 - `GPU_MEMORY_UTILIZATION=0.85`
-- `MTP_NUM_TOKENS=5`
+- `MTP_NUM_TOKENS=3` (with `draft_sample_method=probabilistic`; see the [garble fix](#garble-fix-2026-07-03))
 - `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`
 - `VLLM_USE_B12X_WO_PROJECTION=1`
-- `GENERATION_TEMPERATURE=0.0`
-- `GENERATION_TOP_P=1.0`
-- `GENERATION_TOP_K=40`
-- `GENERATION_REPETITION_PENALTY=1.05`
+- `VLLM_USE_FLASHINFER_SAMPLER=1`
+- `VLLM_DSPARK_REPLICATE_MARKOV_W1=1`
 - `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0`
+- no `--override-generation-config` (removed in the 2026-07-03 garble fix)
 
 Build the base overlay and Stage C NVFP4 image:
 
@@ -494,11 +520,17 @@ Core vLLM flags:
 - `--max-model-len 1048576`
 - `--max-num-seqs 6`
 - `--max-num-batched-tokens 8192`
+- `--max-cudagraph-capture-size 6` (must equal `--max-num-seqs`)
 - `--gpu-memory-utilization 0.80`
-- `--speculative-config '{"method":"dspark","num_speculative_tokens":${MTP_NUM_TOKENS:-5}}'`
+- `--enable-prefix-caching`
+- `--async-scheduling`
+- `--enable-chunked-prefill`
+- `--generation-config vllm` (no `--override-generation-config`)
+- `--speculative-config '{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic"}'`
 
 Key runtime env:
 
+- `VLLM_USE_FLASHINFER_SAMPLER=1`
 - `VLLM_USE_B12X_MOE=1`
 - `VLLM_USE_B12X_WO_PROJECTION=1`
 - `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`
@@ -532,9 +564,10 @@ python3 benchmarks/keys-concurrency/correctness_test.py http://127.0.0.1:8888
 ### 1M Single-Stream Legacy Profile
 
 For conservative single-stream testing, set `MAX_NUM_SEQS=1` and
-`VLLM_USE_B12X_WO_PROJECTION=0`. Keep `MTP_NUM_TOKENS=5` unless you are
-deliberately running an experiment; upstream Mia and Keys both validate the
-DSpark path at MTP5.
+`VLLM_USE_B12X_WO_PROJECTION=0`. The default `MTP_NUM_TOKENS=3` with
+`draft_sample_method=probabilistic` (2026-07-03 garble fix) applies here too;
+older runs used greedy-draft MTP5, which upstream Mia and Keys had validated but
+which caused the cold-start concurrent garble in agent serving.
 
 ## Verify
 
@@ -602,9 +635,11 @@ scripts/capture_runtime.sh runtime-after-change
   confidence scheduler.
 - The current validated agent-serving profile is `MAX_MODEL_LEN=1500000`,
   `MAX_NUM_SEQS=12`, `GPU_MEMORY_UTILIZATION=0.85`,
-  `MTP_NUM_TOKENS=5`, `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`,
-  `VLLM_USE_B12X_WO_PROJECTION=1`, deterministic generation overrides, and
-  `VLLM_DSV4_B12X_COMPRESSED_MLA=0`.
+  `MTP_NUM_TOKENS=3` with `draft_sample_method=probabilistic`,
+  `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`, `VLLM_USE_FLASHINFER_SAMPLER=1`,
+  `VLLM_USE_B12X_WO_PROJECTION=1`, no `--override-generation-config`
+  (2026-07-03 garble fix), and `VLLM_DSV4_B12X_COMPRESSED_MLA=0`. The throughput
+  tables above were captured on the pre-fix greedy-draft MTP5 configuration.
 - Worker-first startup avoids a race during multi-node `mp` initialization.
 - Requires matching images on both nodes, correct NCCL/RoCE settings, and a
   two-node Blackwell-class/DGX Spark setup.

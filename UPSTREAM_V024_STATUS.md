@@ -115,12 +115,12 @@ Until the v0.24 DSpark lane is proven, this repo's production default remains:
 - `MAX_MODEL_LEN=1048576`
 - `MAX_NUM_SEQS=6`
 - `MAX_NUM_BATCHED_TOKENS=8192`
-- `MTP_NUM_TOKENS=5`
+- `MTP_NUM_TOKENS=3` with `draft_sample_method=probabilistic`
 - `kv_cache_dtype=nvfp4_ds_mla`
 - Keys Patch 1 / Patch 2 / Patch 2b concurrency behavior
-- safe server-side generation floor:
-  `temperature=0.6`, `top_p=0.95`, `top_k=40`,
-  `repetition_penalty=1.05`
+- no server-side sampling override (`--generation-config vllm` only); the old
+  `repetition_penalty=1.05` floor was removed in the 2026-07-03 garble fix
+  because it is a DSpark spec-decode crash risk
 
 Exact deterministic tests should send `temperature: 0` in the request body.
 

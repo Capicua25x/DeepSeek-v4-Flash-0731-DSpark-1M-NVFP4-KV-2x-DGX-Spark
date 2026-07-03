@@ -10,9 +10,17 @@ or move production to fp8. The current stable path keeps:
 - `kv_cache_dtype=nvfp4_ds_mla`
 - `max_model_len=1500000`
 - `max_num_seqs=12`
-- `MTP_NUM_TOKENS=5`
+- `MTP_NUM_TOKENS=3` with `draft_sample_method=probabilistic`
 - Keys Patch 2b concurrency behavior
-- safe server-side sampling defaults for agent gateways
+- no server-side sampling override (`--generation-config vllm` only)
+
+> **2026-07-03 update.** The primary garble — a new session's first prompt
+> dumping tool-call fragments under concurrency, then recovering — was
+> root-caused to a DSpark spec-decode cold-start draft/target mismatch (a greedy
+> draft) plus a `repetition_penalty` crash risk, not sampling. The current fix is
+> the five changes summarized in the README
+> ["Garble fix (2026-07-03)"](README.md#garble-fix-2026-07-03) section. This note
+> is kept for the deployment-drift and per-node checks that still apply.
 
 ## What Was Happening
 
@@ -30,17 +38,22 @@ The failures we isolated came from a mix of deployment drift and unsafe defaults
 4. Harness testing can be contaminated by stale sessions or silent fallbacks.
 5. Some worker nodes need their own checkout path and Hugging Face cache path.
 
-The sampling override is a server-side floor for requests that omit sampling
-fields. If a client sends explicit `temperature`, `top_p`, `top_k`, or
-`repetition_penalty`, the client request remains the source of truth.
+As of the 2026-07-03 garble fix there is no server-side sampling override at all
+(the launcher runs `--generation-config vllm` with no `--override-generation-config`).
+Client request parameters remain the source of truth; do not add a server-side
+`repetition_penalty`, which is a documented DSpark spec-decode crash risk.
 
 ## What Changed
 
 The public recipe now carries the stable agent-serving defaults directly:
 
+- `--speculative-config '{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic"}'`
+- `--max-cudagraph-capture-size` equal to `--max-num-seqs`
+- `--async-scheduling` and `--enable-chunked-prefill`
 - `--default-chat-template-kwargs '{"thinking":false}'`
-- `--generation-config vllm`
-- `--override-generation-config '{"temperature":0.0,"top_p":1.0,"top_k":40,"repetition_penalty":1.05}'`
+- `--generation-config vllm` (no `--override-generation-config`; the old
+  `repetition_penalty=1.05` was a spec-decode crash risk)
+- `VLLM_USE_FLASHINFER_SAMPLER=1`
 - `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`
 - `VLLM_DSPARK_CONFIDENCE_SCHEDULER=off`
 - `VLLM_DSPARK_LOCAL_ARGMAX=1`
@@ -79,11 +92,9 @@ MAX_MODEL_LEN=1500000
 MAX_NUM_SEQS=12
 MAX_NUM_BATCHED_TOKENS=8192
 GPU_MEMORY_UTILIZATION=0.85
-MTP_NUM_TOKENS=5
-GENERATION_TEMPERATURE=0.0
-GENERATION_TOP_P=1.0
-GENERATION_TOP_K=40
-GENERATION_REPETITION_PENALTY=1.05
+MTP_NUM_TOKENS=3
+VLLM_USE_FLASHINFER_SAMPLER=1
+VLLM_DSPARK_REPLICATE_MARKOV_W1=1
 ```
 
 Then replace the old env file:
@@ -174,11 +185,11 @@ http://HEAD_NODE_IP:8888/v1
 model: deepseek-v4-flash-dspark
 context_length: 1500000
 temperature: 0
-top_p: 1.0
-top_k: 40
-repetition_penalty: 1.05
 thinking: false
 ```
+
+Do not set a `repetition_penalty` on the DSpark speculative-decode path; it is a
+documented spec-decode crash risk (illegal memory access), not a garble fix.
 
 For the prior conservative 1M/6 lane, use `context_length: 1048576`.
 

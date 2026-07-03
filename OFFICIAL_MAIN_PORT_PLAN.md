@@ -19,7 +19,7 @@ The live production-safe lane remains:
 - B12X MXFP4 MoE backend
 - `MAX_MODEL_LEN=1048576`
 - `MAX_NUM_SEQS=6`
-- `MTP_NUM_TOKENS=5`
+- `MTP_NUM_TOKENS=3` with `draft_sample_method=probabilistic`
 
 ## Prototype Patch Built
 
