@@ -19,6 +19,21 @@ Keys' patch fixes the two core blockers for `max_num_seqs > 1`:
 
 The validated concurrency numbers in this repo depend directly on that patch.
 
+## DSpark Cold-Start Garble Root-Cause Fix (Patch 3)
+
+The scheduler-level root cause of the cold-resume garble (prompt echo / leaked
+tool-schema text at the start of a reply on long resumed conversations) was found
+and fixed by **roady001**:
+
+- Issue: https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark/issues/3
+- Fix: a 4-line guard in `Scheduler.update_from_output` so spec-token placeholders
+  are only resized on genuine decode steps — never on mid chunked-prefill requests
+  (which upstream never gives placeholders) or preempted requests.
+
+roady001 confirmed this fixes the garble on its own, without any of the earlier
+launch/config changes — i.e. it addresses the actual root cause rather than reducing
+the symptom. See `docs/PATCHES.md` (Patch 3) for the full analysis.
+
 ## DSpark vLLM Integration
 
 Rafael Caricio published the DSpark vLLM integration and deployment work this

@@ -1487,6 +1487,17 @@ class Scheduler(SchedulerInterface):
             elif (
                 draft_token_lengths is not None
                 and self.scheduler_config.async_scheduling
+                # Patch 3 (root-cause fix, credit: roady001, issue #3): only resize
+                # spec placeholders for requests the AsyncScheduler itself would give
+                # placeholders. Without these guards the resize ran for EVERY running
+                # request — including ones mid chunked-prefill (upstream never installs
+                # spec placeholders on prefill chunks) — which attached spec tokens to
+                # the final prompt chunk of a long COLD resume, corrupting the prompt
+                # tail: prompt echo / leaked tool-schema text at the start of the reply,
+                # then recovering once pure decode began. Guard it to decode steps only.
+                and new_token_ids
+                and not request.is_prefill_chunk
+                and request.status == RequestStatus.RUNNING
             ):
                 # Async speculative scheduling normally installs a fixed
                 # placeholder list before the worker proposes the next draft.

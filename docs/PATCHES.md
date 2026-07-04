@@ -1,8 +1,9 @@
-# Patch 1 & Patch 2 — detailed reference
+# Patch 1, Patch 2 & Patch 3 — detailed reference
 
-Both patches live in the DSpark vLLM overlay and together make `--max-num-seqs > 1`
+Patches 1/2/2b live in the DSpark vLLM overlay and together make `--max-num-seqs > 1`
 **correct** under vLLM-v1 continuous batching. Single-stream and uniform-static
-batches keep the original code path (byte-identical).
+batches keep the original code path (byte-identical). **Patch 3 fixes the cold-start
+garble on long resumed conversations** (root cause — see below; credit roady001, issue #3).
 
 Files changed:
 
@@ -11,6 +12,7 @@ Files changed:
 | `vllm/v1/spec_decode/dspark_proposer.py` | 158 | 10 | draft loop, slot map, ragged context (Patch 1+2+2b) |
 | `vllm/models/deepseek_v4/nvidia/dspark.py` | 110 | 12 | persistent KV store (`store_main_kv`), `prefill_main` |
 | `vllm/v1/worker/gpu_model_runner.py` | 10 | 0 | thread `req_ids` into `propose()` |
+| `vllm/v1/core/sched/scheduler.py` | 4 | 0 | guard spec-placeholder resize (Patch 3) |
 
 ---
 
@@ -135,3 +137,65 @@ prefilling), detection was skipped and the code fell through to the rectangular
 GSM8K N=8 (200 Q) — the load that crashed pre-fix — now completes with **0 errors**,
 93.5% accuracy vs 95.0% sequential, **97.5% per-question agreement** (quality-neutral
 within batch FP-nondeterminism).
+
+---
+
+## Patch 3 — no spec placeholders on prefill chunks (cold-start garble fix)
+
+**Credit: roady001 (issue #3).** Confirmed to fix the garble on its own, with none
+of the launch/config changes applied — i.e. this is the actual root cause, not a
+symptom reducer.
+
+### Symptom
+Resuming an existing long conversation **cold** (server restarted, or the prompt
+fell out of the prefix cache) produced garbage at the **start** of the reply —
+prompt echo, leaked tool/schema text, "your message was cut off"-style replies —
+then generation recovered. Warm continuations of the same conversation were
+clean. Reproduced deterministically with a ~98K-token prompt at `temperature 0`:
+cold run echoed prompt content from ~=`prompt_len - 8192` (the last chunk
+boundary) and looped; the immediately repeated (warm) run answered correctly.
+
+### Root cause
+The DSpark async-scheduling addition in `Scheduler.update_from_output` resizes
+the `[-1]` spec-token placeholder list to DSpark's confidence-scheduled draft
+length. It ran for **every running, non-stopped request in the batch — including
+requests still mid-way through a chunked prefill**. Upstream never installs spec
+placeholders on prefill chunks: `AsyncScheduler._update_after_schedule` skips
+`request.is_prefill_chunk`, and `Scheduler.update_draft_token_ids` explicitly
+clears drafts for prefill chunks.
+
+With a long cold prompt (multiple `max_num_batched_tokens=8192` chunks), the
+illegal placeholders made the scheduler attach `num_speculative_tokens` spec
+tokens to the request's **final prompt chunk**. Two corruptions follow:
+
+1. The drafts verified there were proposed from the **truncated** prompt
+   (mid-prefill DSpark drafts — prompt-continuation predictions).
+2. The request was in the previous step's **discard set** (mid-prefill), so the
+   worker excludes it from `prev_req_id_to_index`; `_prepare_input_ids` then
+   never scatters real draft ids over the `-1` placeholders, and the target
+   forward for the final chunk sees invalid token ids at the spec positions.
+
+Either way the first sampled tokens of the reply are conditioned on a corrupted
+prompt tail — visible as prompt echo / garble at the start of a cold resume,
+recovering once pure decode steps take over. (Earlier this corrupted whole
+conversations; Patches 1/2/2b fixed the persistent-KV side, leaving only the
+cold-start window.)
+
+### Fix
+`vllm/v1/core/sched/scheduler.py` (`update_from_output`): only resize spec
+placeholders for requests the AsyncScheduler itself would give placeholders —
+`new_token_ids` non-empty, `not request.is_prefill_chunk`, and
+`request.status == RequestStatus.RUNNING` (a preempted request must keep its
+cleared spec list).
+
+### Validation
+Same ~98K-token cold-resume prompt at `temperature 0` after the fix: the cold
+first reply is correct (no echo, no cut-off complaint), and matches the warm
+rerun. Short direct prompts and the deterministic `NVFP4 DSPARK OK` check are
+unchanged.
+
+### Notes (independently confirmed)
+- `repetition_penalty=1.05` is a separate DSpark crash risk; drop it first if an
+  illegal-memory / IMA crash appears.
+- `draft_sample_method=probabilistic` is a valid tuning option but is **not**
+  needed to fix this garble once the scheduler guard is in place.
