@@ -502,13 +502,22 @@ Edit these values for your cluster:
 Keep these agent-serving defaults unless you are deliberately experimenting:
 
 - `VLLM_HOST=0.0.0.0` if Hermes/OpenClaw or another machine must reach the API
-- `MAX_MODEL_LEN=1500000`
+- `MAX_MODEL_LEN=1048576` — **1M, the model's true YaRN ceiling** (see note ↓)
 - `MAX_NUM_SEQS=12`
 - `GPU_MEMORY_UTILIZATION=0.85`
 - `MTP_NUM_TOKENS=3` (with `draft_sample_method=probabilistic`; see the [garble fix](#garble-fix-2026-07-03))
 - `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`
 - `VLLM_USE_B12X_WO_PROJECTION=1`
 - `VLLM_USE_FLASHINFER_SAMPLER=1`
+
+> **Context length — 1M is the ceiling, not 1.5M.** The model's `config.json` uses
+> YaRN with `original_max_position_embeddings=65536 × factor 16 = 1,048,576` and
+> `max_position_embeddings=1048576`, so **1M (1048576) is the true, calibrated ceiling.**
+> Earlier profiles here ran `1500000` by setting `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`, which
+> only forces vLLM to *accept* a longer ceiling — it boots and the throughput benchmarks
+> below are valid, but any request growing past 1M extrapolates past what YaRN was tuned
+> for, so coherent output past 1M is not guaranteed. **Recommended default: `MAX_MODEL_LEN=1048576`.**
+> The 1.5M figures retained below are kept as "how far it was pushed" records, not a quality claim past 1M.
 - `VLLM_DSPARK_REPLICATE_MARKOV_W1=1`
 - `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0`
 - no `--override-generation-config` (removed in the 2026-07-03 garble fix)

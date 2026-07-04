@@ -88,7 +88,7 @@ WORKER_HF_CACHE=...
 VLLM_HOST=0.0.0.0
 VLLM_HOST_IP=...
 WORKER_VLLM_HOST_IP=...
-MAX_MODEL_LEN=1500000
+MAX_MODEL_LEN=1048576
 MAX_NUM_SEQS=12
 MAX_NUM_BATCHED_TOKENS=8192
 GPU_MEMORY_UTILIZATION=0.85
@@ -183,7 +183,7 @@ Only after direct vLLM prompts are clean, point Hermes/OpenClaw/other agents to:
 ```text
 http://HEAD_NODE_IP:8888/v1
 model: deepseek-v4-flash-dspark
-context_length: 1500000
+context_length: 1048576
 temperature: 0
 thinking: false
 ```
