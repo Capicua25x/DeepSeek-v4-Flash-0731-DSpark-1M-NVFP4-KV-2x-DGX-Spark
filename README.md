@@ -570,16 +570,17 @@ Core vLLM flags:
 - `--async-scheduling`
 - `--enable-chunked-prefill`
 - `--generation-config vllm` (no `--override-generation-config`)
-- `--speculative-config '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}'`
-  - **`5` recommended once [Patch 3](docs/PATCHES.md) is applied.** The `3` above
-    was the pre-Patch-3, garble-era value (it shrank the cold-start mismatch window
-    as a symptom-reducer). Patch 3 fixes the cold-start garble at the scheduler root,
-    so the higher spec depth is safe again — and faster. Keep `draft_sample_method:probabilistic`:
-    it beats greedy for DSpark's calibrated draft heads (higher acceptance → faster),
-    even though it's no longer *needed* for garble-safety.
-  - **Benchmarked (2× DGX Spark, TP2, 350K ctx, temp 0, Patch 3 + spec=5 + probabilistic):**
-    mixed real-world avg **~49 tok/s** (structured/agentic — JSON, code, math — **54–60 tok/s**;
-    free-form creative ~34; deterministic best-case ~75). spec=3 ≈ 40 avg; greedy spec=5 ≈ 32 avg.
+- `--speculative-config '{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic"}'`
+  - **This 1M / `max-num-seqs 6` profile MUST use `num_speculative_tokens: 3`.** Spec-decode requires the
+    cudagraph capture sizes to be a multiple of `num_speculative_tokens + 1`. At `max-num-seqs 6` vLLM's
+    ladder is `[1,2,4]`: spec 3 → multiple of **4** (the `4` satisfies it ✓); **spec 5 → multiple of 6,
+    which `[1,2,4]` cannot satisfy → `No valid cudagraph sizes` and engine init FAILS.** (Verified 2026-07-04.)
+  - **`num_speculative_tokens: 5` is faster but requires `max-num-seqs` to be a multiple of 6** (e.g. 12) so
+    the ladder yields a valid captured size. That's the lower-context / higher-concurrency lane — see
+    [`DEFAULT-CONFIG.md`](DEFAULT-CONFIG.md) (350K ctx, seqs 12, spec 5), benchmarked **~49 tok/s mixed /
+    54–60 structured / ~75 best-case**; spec 3 ≈ 40 avg. At full 1M the seqs-12 KV won't fit on 2 Sparks,
+    so **1M pairs with seqs 6 + spec 3**; the seqs-12 + spec-5 lane pairs with a shorter context.
+  - Keep `draft_sample_method:probabilistic` — it beats greedy for DSpark's calibrated draft heads.
 
 Key runtime env:
 
