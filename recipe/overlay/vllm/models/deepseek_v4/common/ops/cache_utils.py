@@ -259,8 +259,16 @@ def _dequantize_and_gather_k_kernel(
         token_fp8_ptr = token_data_ptr
         token_bf16_ptr = token_data_ptr + fp8_dim
 
-        # Output pointer for this token (flattened)
-        output_row_ptr = out_ptr + batch_idx * out_stride0 + (offset + i) * out_stride1
+        # Output pointer for this token (flattened).
+        # int64: batch_idx * out_stride0 can exceed 2^31 when the gather buffer
+        # is sized for very long sequences (out_stride0 = max_num_tokens * 512;
+        # wraps at >= ~819K tokens with batch_idx >= 4) — same overflow class
+        # as the guarded physical_block_idx multiply above.
+        output_row_ptr = (
+            out_ptr
+            + batch_idx.to(tl.int64) * out_stride0
+            + (offset + i) * out_stride1
+        )
 
         # ========== Dequantize FP8 portion using UE8M0 ==========
         for qblock_idx in tl.static_range(n_quant_blocks):
