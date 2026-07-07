@@ -40,6 +40,16 @@ the launch/config changes, which only reduced the symptom.
 Fix commit: https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark/commit/e83606a
 See `docs/PATCHES.md` (Patch 3) for the full analysis.
 
+## CUDA-Graph Capture-Size Fix (concurrency throughput)
+
+**Wpnx330** found and fixed a silent throughput cliff: `--max-cudagraph-capture-size`
+must be a multiple of `(num_speculative_tokens + 1)`, so passing a raw `MAX_NUM_SEQS`
+(6) with spec=3 floored the captured size to 4 — enough for one active request. Any
+concurrency above that fell off the captured CUDA-graph path into eager/piecewise and
+throughput collapsed to <1 tok/s. Fix: `--max-cudagraph-capture-size $((MAX_NUM_SEQS * (MTP_NUM_TOKENS + 1)))`.
+
+- PR: https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark/pull/5
+
 ## DSpark vLLM Integration
 
 Rafael Caricio published the DSpark vLLM integration and deployment work this
