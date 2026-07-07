@@ -22,17 +22,23 @@ The validated concurrency numbers in this repo depend directly on that patch.
 ## DSpark Cold-Start Garble Root-Cause Fix (Patch 3)
 
 The scheduler-level root cause of the cold-resume garble (prompt echo / leaked
-tool-schema text at the start of a reply on long resumed conversations) was found
-and fixed by **roady001**:
+tool-schema text at the start of a reply on long resumed conversations) was tracked
+down and fixed as a collaboration between **Roady001** and **Fable**:
 
-- Issue: https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark/issues/3
-- Fix: a 4-line guard in `Scheduler.update_from_output` so spec-token placeholders
-  are only resized on genuine decode steps — never on mid chunked-prefill requests
-  (which upstream never gives placeholders) or preempted requests.
+- **Roady001** — reported the issue (that the 2026-07-03 launch/config change only
+  reduced the symptom and did not address the root cause) and independently validated
+  the final fix on his own 2x DGX Spark, confirming the garble is gone without any of
+  the earlier config workarounds.
+  Issue: https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark/issues/3
+- **Fable** — the root-cause analysis and the patch: a guard in
+  `Scheduler.update_from_output` so spec-token placeholders are only resized on genuine
+  decode steps (`new_token_ids` non-empty, `not request.is_prefill_chunk`,
+  `status == RUNNING`) — never on a mid chunked-prefill final chunk or a preempted request.
 
-roady001 confirmed this fixes the garble on its own, without any of the earlier
-launch/config changes — i.e. it addresses the actual root cause rather than reducing
-the symptom. See `docs/PATCHES.md` (Patch 3) for the full analysis.
+This is the actual root cause of the cold-resume prompt-echo / tool-schema garble, not
+the launch/config changes, which only reduced the symptom.
+Fix commit: https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark/commit/e83606a
+See `docs/PATCHES.md` (Patch 3) for the full analysis.
 
 ## DSpark vLLM Integration
 
