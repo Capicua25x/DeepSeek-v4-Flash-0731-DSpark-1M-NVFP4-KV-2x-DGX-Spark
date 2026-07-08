@@ -103,3 +103,12 @@ and Triton are separate upstream artifacts with their own licenses and terms.
 
 - Parameterized the API port (`VLLM_PORT`, PR #1).
 - Independently identified MTP=5 speculation garbling and proposed the MTP=3 default in PR #1 (2026-06-30) — four days before the 2026-07-03 garble fix adopted the same value on main. Early, correct call.
+
+## paulbrav
+
+- Reported the long-context engine-death crash (#2) with a clean deterministic repro AND shipped the fix (PR #4: sparse-indexer gather guard + stale draft-KV slot clamp).
+- Producer-side instrumentation of the slot-corruption mechanism (canary readback, 12h compute-sanitizer, graph-replay-private-state localization) and a debug-tooling dead-ends writeup (cuda-gdb/coredump limits on GB10/sbsa) that materially informs #6.
+
+## DaveCharland
+
+- Reported and characterized the episodic soft-failure (#6): real output tokens parsing to empty/thinking-only content under sustained agent load, with a deterministic within-episode repro and full spec-acceptance-collapse telemetry.
