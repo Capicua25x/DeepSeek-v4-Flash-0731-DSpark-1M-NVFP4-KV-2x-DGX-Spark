@@ -1,5 +1,22 @@
 # DeepSeek V4 Flash DSpark C12 NVFP4 KV on 2x DGX Spark
 
+> **⚠️ vLLM version note (concurrency fix):** the concurrency-crash fix is a source
+> patch to `dspark_proposer.py`, bind-mounted via compose. The committed
+> `recipe/vllm/v1/spec_decode/dspark_proposer.py` is **version-matched to this repo's
+> default image** (`vllm-dspark-runtime:dspark-nvfp4-stage-c`). If you run a **different
+> vLLM build**, its `propose()` signature may differ and mounting the committed file
+> will crash with `propose() got an unexpected keyword argument ...`. In that case,
+> patch your own image's proposer instead:
+> ```bash
+> docker create --name t <your-image>
+> docker cp t:/opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark_proposer.py ./myproposer.py
+> docker rm t
+> python3 scripts/apply-nonuniform-guard.py ./myproposer.py   # version-independent
+> # then bind-mount ./myproposer.py at that same container path
+> ```
+
+
+
 Self-contained two-node DGX Spark recipe for serving `DeepSeek-V4-Flash-DSpark`
 with vLLM TP=2, DSpark speculative decoding, and a 1.5M-token max model length
 using the experimental `nvfp4_ds_mla` KV-cache path.
