@@ -98,3 +98,8 @@ The vLLM overlay files and `patches/keys-concurrency.patch` are vLLM/DSpark
 derived and retain their Apache-2.0 lineage from the upstream sources and
 Keys' patch repo. Model weights, base images, CUDA/NCCL, FlashInfer, TileLang,
 and Triton are separate upstream artifacts with their own licenses and terms.
+
+## 0rand
+
+- Parameterized the API port (`VLLM_PORT`, PR #1).
+- Independently identified MTP=5 speculation garbling and proposed the MTP=3 default in PR #1 (2026-06-30) — four days before the 2026-07-03 garble fix adopted the same value on main. Early, correct call.
