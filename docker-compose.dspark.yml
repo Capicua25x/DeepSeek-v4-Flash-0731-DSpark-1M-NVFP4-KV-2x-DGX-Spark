@@ -16,6 +16,7 @@ services:
 
     volumes:
       - ${HF_CACHE:-${HOME}/.cache/huggingface}:/cache/huggingface
+      - ./recipe/vllm/v1/spec_decode/dspark_proposer.py:/opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark_proposer.py:ro
 
     environment:
       HF_HOME: /cache/huggingface
