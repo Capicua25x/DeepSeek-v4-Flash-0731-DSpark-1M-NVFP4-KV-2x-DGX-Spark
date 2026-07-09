@@ -32,6 +32,18 @@ Both checkouts point `start-deepseek-v4-flash-dspark.sh` at the same repo, so `u
 - After **any** failed boot: full recreate (`stop-` script on both nodes, then start fresh) — never retry-start into a half-dead state, that's the silent-hang trap.
 - The `vllm_tri` container on Asusi is a **decoy** — it resolves the model from the HF hub cache (a stub) and always dies with `LocalEntryNotFoundError`. Not prod DS4. Safe to `docker rm`.
 
+## Update (2026-07-08, later): fix delivery moved into the image
+The bind-mount delivery above bit back the same day: a same-tag image rebuild
+moved to a newer vLLM whose runner passes `req_ids=` to the proposer, and the
+older mounted copy then crashed **every** request with `propose() got an
+unexpected keyword argument 'req_ids'`. The overlay in `recipe/overlay/` (baked
+into the image at build) already carried the concurrency fix, so the bind-mount
+is now gone from compose, and the start script verifies the image against
+`recipe/overlay/` and rebuilds automatically when stale. Practical effect for
+you: `bash update-and-restart.sh` works unchanged, but the first run after this
+update may trigger an image rebuild on rigs whose image predates the current
+overlay — let it finish; that is the fix being baked in.
+
 ## What's still open (not blocking)
 - **Issue #6 — soft-failure:** completions that return real tokens but parse to empty/thinking-only content, episodically under sustained agent load. Engine survives (HTTP 200 throughout), so it's a quality bug, not a crash. Under active investigation on the Bluey/Reddie rig; if you see empty agent responses that a retry fixes, that's this — capture the raw response body and drop it in issue #6.
 

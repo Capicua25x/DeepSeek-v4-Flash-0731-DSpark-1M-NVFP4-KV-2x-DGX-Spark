@@ -28,6 +28,35 @@ set +a
 
 cd "$SCRIPT_DIR"
 
+# DSpark source patches ship inside the runtime image (recipe/overlay/), not
+# as runtime bind-mounts. Launching an image that predates the current overlay
+# would run stale proposer code, so verify and rebuild first.
+# Skip with SKIP_OVERLAY_CHECK=1 (e.g. offline, or a deliberate old image).
+if [ "${SKIP_OVERLAY_CHECK:-0}" != "1" ]; then
+  IMG="${DSPARK_VLLM_IMAGE:-vllm-dspark-runtime:dspark-nvfp4-stage-c}"
+  OVERLAY_DOCKERFILE="$SCRIPT_DIR/recipe/Dockerfile.dspark-runtime-overlay"
+  STALE=0
+  if ! docker image inspect "$IMG" >/dev/null 2>&1; then
+    echo "Runtime image $IMG not present; building it."
+    STALE=1
+  else
+    IMAGE_SUMS="$(docker run --rm --entrypoint bash "$IMG" -c \
+      "sha256sum $(awk '$1 == "COPY" { printf "%s ", $3 }' "$OVERLAY_DOCKERFILE")" 2>/dev/null || true)"
+    while read -r src dst; do
+      want="$(sha256sum "$SCRIPT_DIR/recipe/overlay/$src" | awk '{ print $1 }')"
+      have="$(printf '%s\n' "$IMAGE_SUMS" | awk -v f="$dst" '$2 == f { print $1 }')"
+      if [ "$want" != "$have" ]; then
+        echo "Runtime image $IMG is stale against recipe/overlay/$src; rebuilding."
+        STALE=1
+        break
+      fi
+    done < <(awk '$1 == "COPY" { print $2, $3 }' "$OVERLAY_DOCKERFILE")
+  fi
+  if [ "$STALE" = "1" ]; then
+    "$SCRIPT_DIR/build-dspark-vllm-runtime.sh"
+  fi
+fi
+
 WORKER_DIR="${WORKER_SCRIPT_DIR:-${WORKER_DIR:-$SCRIPT_DIR}}"
 WORKER_HF_CACHE="${WORKER_HF_CACHE:-${HF_CACHE:-}}"
 REMOTE_WORKER_DIR="$(printf '%q' "$WORKER_DIR")"
@@ -37,8 +66,6 @@ echo "Syncing DSpark deployment files to ${WORKER_HOST}:${WORKER_DIR}"
 ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR"
 scp "$COMPOSE_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/docker-compose.dspark.yml"
 scp "$ENV_FILE" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/.env.dspark"
-ssh "$WORKER_HOST" "mkdir -p $REMOTE_WORKER_DIR/recipe/vllm/v1/spec_decode"
-scp "$SCRIPT_DIR/recipe/vllm/v1/spec_decode/dspark_proposer.py" "${WORKER_HOST}:${REMOTE_WORKER_DIR}/recipe/vllm/v1/spec_decode/dspark_proposer.py"
 
 echo "Starting DSpark worker on ${WORKER_HOST}..."
 ssh "$WORKER_HOST" "$REMOTE_COMPOSE NODE_RANK=1 HEADLESS=1 HF_CACHE='$WORKER_HF_CACHE' VLLM_HOST_IP='$WORKER_VLLM_HOST_IP' docker compose --env-file .env.dspark -f docker-compose.dspark.yml up -d"
