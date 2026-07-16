@@ -2,11 +2,10 @@
 """Apply the non-uniform-batch speculation guard to ANY DSpark proposer version.
 
 Why this exists: the concurrency-crash fix is a source patch to
-`dspark_proposer.py`. The committed `recipe/vllm/v1/spec_decode/dspark_proposer.py`
-is version-matched to this repo's DEFAULT image
-(`vllm-dspark-runtime:dspark-nvfp4-stage-c`). If you run a DIFFERENT vLLM build,
-its `propose()` signature may differ (e.g. older builds carry an extra `req_ids`
-kwarg) and bind-mounting the committed file over it will crash with
+`dspark_proposer.py`, shipped baked into this repo's runtime image from
+`recipe/overlay/`. If you run a DIFFERENT prebuilt vLLM image, its `propose()`
+signature may differ (e.g. some builds carry an extra `req_ids` kwarg), so
+copying another version's proposer over it will crash with
 `propose() got an unexpected keyword argument ...`.
 
 This script instead patches YOUR image's own proposer in place, so the guard is
