@@ -271,6 +271,36 @@ matters.
 single-prompt "tok/s" claim for this model — including ours — is a statement about the
 prompt as much as the hardware. Quote the mean for planning and the peak for bragging.
 
+### What an agent fleet actually gets (realistic mixed traffic)
+
+Every number above is a benchmark: one prompt shape, temp 0, best-of-2. Useful for comparing
+configurations, misleading for capacity planning. So here is the same server under traffic that
+looks like actual agent work — tool calls, code refactors, structured JSON, multi-step
+reasoning, explanatory prose and long-context summarisation, at mixed temperatures (0.0/0.3/0.7)
+and mixed token budgets (300/500/800), 4 concurrent workers, via
+[`benchmarks/soak.py`](benchmarks/soak.py):
+
+| | benchmark (BST prompt, temp 0) | realistic mixed traffic |
+| --- | ---: | ---: |
+| per-stream tok/s @ c4 | 38.7 | **22.1** |
+| aggregate tok/s @ c4 | 151.1 | **~87** |
+
+**Plan with ~87 aggregate / ~22 per-stream at c4, not 151.** The difference is not a
+regression and not a config problem — it is DSpark acceptance responding to harder, more varied
+content, exactly as the per-position acceptance data predicts. The benchmark number is real;
+it just describes a prompt you will rarely send.
+
+Full run: **553 requests / 212,974 generated tokens over 40 minutes at concurrency 4** —
+**88.6 tok/s aggregate**, and **zero** soft-empty completions, zero degenerate outputs
+(repetition loops, CJK drift, template/XML leakage) and zero errors. Per-stream throughput held
+at 22.1-22.3 tok/s across all eight 5-minute windows, and neither container restarted.
+
+That is a genuine stability result for the shipped config, but read it carefully as evidence for
+[issue #6](https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark/issues/6):
+it is a **negative** result, and without knowing the reporters' daily request volume it cannot be
+converted into "we would have expected N events." 553 clean requests is much better than the
+5-prompt gate it replaces; it is still not proof of absence.
+
 ### Warm up before you benchmark — the first requests run ~30% slow
 
 Found while verifying a rollback, and it invalidates a lot of casual benchmarking of this
