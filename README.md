@@ -1,4 +1,4 @@
-# DeepSeek V4 Flash (DSpark) on 2x DGX Spark — 1M context, NVFP4 KV, ~50-60 tok/s
+# DeepSeek V4 Flash (DSpark) on 2x DGX Spark — 1M context, NVFP4 KV, ~70 tok/s
 
 > Self-contained two-node DGX Spark recipe for serving `DeepSeek-V4-Flash-DSpark`
 > with vLLM TP=2, DSpark speculative decoding, and an experimental `nvfp4_ds_mla`
@@ -6,6 +6,14 @@
 > concurrency.
 
 ## TL;DR
+
+> **Defaults fixed 2026-07-29 — re-pull if you cloned before this.** The shipped
+> `.env`/compose defaults were still handing out `MTP_NUM_TOKENS=3`, a leftover from the
+> 2026-07-03 greedy-draft garble fix, even though Patch 3 made `k=5` garble-safe and every
+> doc here specifies 5. **`k=3` costs ~24% decode.** If you benchmarked this recipe with the
+> old defaults you measured the slow path — set `MTP_NUM_TOKENS=5` (now the default) and
+> re-run.
+
 
 - **What you get:** a validated Stage C NVFP4 runtime for `fraserprice/DeepSeek-V4-Flash-DSpark`,
   serving over 2x DGX Spark at TP=2 with DSpark speculative decoding and the
