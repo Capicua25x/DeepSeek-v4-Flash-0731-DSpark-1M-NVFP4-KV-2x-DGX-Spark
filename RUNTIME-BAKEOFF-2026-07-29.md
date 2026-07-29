@@ -126,17 +126,30 @@ whole reason this recipe is worth keeping there rather than chasing upstream ver
 An earlier version of this document claimed B12X gave a ~11.7% larger KV pool at the same
 `gpu_memory_utilization`. **That claim was wrong and is retracted.**
 
-Re-booting the *same* Anemll runtime with the *same* config later in the session reported:
+Re-booting identical configurations later in the session reported wildly different pools — on
+**both** runtimes:
 
 ```
-boot 1   GPU KV cache size: 1,385,765 tokens
-boot 3   GPU KV cache size: 1,533,940 tokens   (Available KV cache memory: 10.58 GiB)
+0.25.2  boot 1   GPU KV cache size: 1,385,765 tokens
+0.25.2  boot 3   GPU KV cache size: 1,533,940 tokens   (+10.7%, Available KV memory 10.58 GiB)
+
+0.21.1  earlier  GPU KV cache size: 1,548,597 tokens
+0.21.1  later    GPU KV cache size: 1,336,656 tokens   (-13.7%, same config, same nodes)
 ```
 
-An 11% swing between two boots of an identical configuration is the same magnitude as the
-"difference" I attributed to the runtime. Available KV memory on GB10 varies with what else
-has touched unified memory, so **a single boot's reported pool size is not a runtime
-property** and should not be compared across runtimes without repeated boots.
+Our own runtime swung **16%** between two boots of a byte-identical configuration — larger than
+the 11.7% "advantage" I originally attributed to it. Available KV memory on GB10 varies with
+whatever else has touched unified memory, so **a single boot's reported pool size is not a
+runtime property** and must not be compared across runtimes without repeated boots.
+
+Also worth noting from the later boot log, since it affects anyone reading pool numbers:
+
+```
+CUDA graph memory profiling is enabled (default since v0.21.0). The current
+--gpu-memory-utilization=0.7800 is equivalent to --gpu-memory-utilization=0.7688 without
+CUDA graph memory profiling. To maintain the same effective KV cache size as before,
+increase --gpu-memory-utilization to 0.7912.
+```
 
 Both runtimes comfortably exceed the 1M calibrated context ceiling at gmu 0.78, which is the
 only thing that actually matters here.
