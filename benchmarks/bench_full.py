@@ -45,8 +45,29 @@ CONC_PROMPT = ("Implement a binary search tree in Python with insert, search, de
                "traversal. Include docstrings and two usage examples. Code only.")
 
 
-def warm(n=4):
-    for _ in range(n):
+# Heavy warm-up is MANDATORY on a freshly booted engine, not politeness.
+# Measured 2026-07-29: immediately after "Application startup complete" (graphs already
+# captured), count300 ran at 58.5 tok/s; after ~5 long generations it settled at 83.3.
+# A 30% penalty, invisible in the boot log. Short 100-token calls do NOT clear it --
+# it takes several hundred-token generations. Benchmark cold and you measure the cold path.
+WARMUP = [
+    ("Implement a binary search tree in Python with insert, search, delete and in-order "
+     "traversal. Include docstrings and two usage examples.", 700),
+    ("Write a 300-word explanation of how speculative decoding works.", 600),
+    ("Compute the running sum of the first 40 prime numbers, showing each step.", 600),
+    ('Output a JSON array of 40 objects, each {"id":N,"name":"user_N"}. JSON only.', 600),
+    ("Explain tensor parallelism versus pipeline parallelism in detail.", 600),
+]
+
+
+def warm(short=4):
+    """Drive the engine to steady state: long generations first, then short calls."""
+    for prompt, mt in WARMUP:
+        try:
+            post(prompt, mt)
+        except Exception:
+            pass
+    for _ in range(short):
         try:
             post("Write a python function that adds two numbers. Code only.", 100)
         except Exception:
