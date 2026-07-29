@@ -1,4 +1,4 @@
-# DeepSeek V4 Flash (DSpark) on 2x DGX Spark — 1M context, NVFP4 KV, ~70 tok/s
+# DeepSeek V4 Flash (DSpark) on 2x DGX Spark — 1M context, NVFP4 KV, 84 tok/s peak
 
 > Self-contained two-node DGX Spark recipe for serving `DeepSeek-V4-Flash-DSpark`
 > with vLLM TP=2, DSpark speculative decoding, and an experimental `nvfp4_ds_mla`
@@ -6,6 +6,14 @@
 > concurrency.
 
 ## TL;DR
+
+> **Full re-characterisation 2026-07-29.** Every number below was re-measured on this
+> config, back to back, on a dedicated experiment lane — decode by content type,
+> concurrency c1–c6, and prefill at depth. Headline: **84.3 tok/s peak, 67.6 mean,
+> 197 tok/s aggregate at c6, 2639 tok/s prefill at 100K.** The newer vLLM 0.25.2 runtime
+> was tested head-to-head on the same hardware and **lost** — see
+> [`RUNTIME-BAKEOFF-2026-07-29.md`](RUNTIME-BAKEOFF-2026-07-29.md), which also contains the
+> per-position acceptance data that explains why decode bursts and then drops.
 
 > **Defaults fixed 2026-07-29 — re-pull if you cloned before this.** The shipped
 > `.env`/compose defaults were still handing out `MTP_NUM_TOKENS=3`, a leftover from the
@@ -214,6 +222,64 @@ scripts/capture_runtime.sh runtime-after-change
 ```
 
 ## Benchmarks
+
+### 2026-07-29 full re-characterisation (authoritative — start here)
+
+Measured on the shipped default config (`MTP_NUM_TOKENS=5`,
+`draft_sample_method: probabilistic`, `nvfp4_ds_mla`, `max_model_len=1048576`,
+`max_num_seqs=6`, `gpu_memory_utilization=0.78`, TP=2) on a dedicated experiment lane, so
+no production traffic contaminated the numbers. Harness:
+[`benchmarks/bench_full.py`](benchmarks/bench_full.py).
+
+**Decode by content type** — temp 0, warm, best-of-2, server-reported
+`completion_tokens` over wall time:
+
+| prompt | tokens | sec | tok/s |
+| --- | ---: | ---: | ---: |
+| count to 300 | 600 | 7.12 | **84.3** |
+| 12x12 multiplication table | 900 | 11.56 | 77.9 |
+| 60-object JSON array | 800 | 10.39 | 77.0 |
+| binary search tree (code) | 600 | 9.34 | 64.2 |
+| 200-word narrative | 251 | 7.25 | 34.6 |
+| **peak / mean** | | | **84.3 / 67.6** |
+
+**Concurrency** — same prompt, 400 tokens each, aggregate and per-stream:
+
+| concurrency | aggregate tok/s | per-stream tok/s |
+| ---: | ---: | ---: |
+| 1 | 61.0 | 61.0 |
+| 2 | 91.7 | 46.9 |
+| 4 | 151.1 | 38.7 |
+| 6 | **197.3** | 33.6 |
+
+**Prefill** — TTFT method, 1 output token:
+
+| prompt depth | prompt tokens | sec | tok/s |
+| ---: | ---: | ---: | ---: |
+| 8K | 6,234 | 4.1 | 1,513 |
+| 32K | 24,900 | 10.9 | 2,284 |
+| 100K | 77,790 | 29.5 | **2,639** |
+
+KV pool at `gpu_memory_utilization=0.78`: **1,548,597 tokens**.
+
+**The 34 → 84 tok/s spread is one server on one config.** Decode speed here is
+`steps/s x accepted-tokens-per-step`, and DSpark acceptance is content-driven, so any
+single-prompt "tok/s" claim for this model — including ours — is a statement about the
+prompt as much as the hardware. Quote the mean for planning and the peak for bragging.
+
+### Is there a faster runtime? (tested, no)
+
+vLLM **0.25.2** (`ghcr.io/anemll/dspark-vllm-gx10:0.1.1`, torch 2.11/cu13) was booted on the
+same two nodes with identical args and benchmarked identically. It lost on the axes that
+matter: **9% down on peak decode, 8% on mean, 29% down at c6.** It won c2 concurrency
+(+11%) and prefill at depth (+9% at 32K). Full data, plus the per-position acceptance
+measurement that explains burst-then-drop, in
+[`RUNTIME-BAKEOFF-2026-07-29.md`](RUNTIME-BAKEOFF-2026-07-29.md).
+
+Short version of why: both runtimes **saturate the draft** (0.25.2 logs 100% acceptance on
+the fast prompt and still loses), so the gap is pure **step time** — 0.25.2 ships
+`CompilationMode.NONE`, trading torch.compile for breakable CUDA graphs, and on this model
+that trade costs more than it returns.
 
 ### 2026-07-02 Keys C12 1.5M NVFP4 checkpoint
 

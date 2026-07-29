@@ -8,6 +8,65 @@ clean output (no garble), honest speed **~49 tok/s mixed / 54–60 structured-ag
 
 ---
 
+## ⭐ CURRENT BEST — re-measured 2026-07-29 (use this)
+
+The 2026-07-04 profile below is kept as the historical as-deployed record. **This is the
+config to run now.** It was re-measured head to head against the newer vLLM 0.25.2 runtime
+on the same two nodes, and it won — see
+[`RUNTIME-BAKEOFF-2026-07-29.md`](RUNTIME-BAKEOFF-2026-07-29.md).
+
+**Measured:** decode **84.3 tok/s peak / 67.6 mean** (5 content types, temp 0, warm),
+**197.3 tok/s aggregate at c6**, prefill **2,639 tok/s at 100K**, KV pool
+**1,548,597 tokens**. Garble gate clean.
+
+```
+/opt/env/bin/vllm serve /cache/huggingface/fraserprice/DeepSeek-V4-Flash-DSpark \
+  --served-model-name deepseek-v4-flash-dspark \
+  --host 0.0.0.0 --port 8888 \
+  --trust-remote-code \
+  --tensor-parallel-size 2 --pipeline-parallel-size 1 \
+  --kv-cache-dtype nvfp4_ds_mla \
+  --block-size 256 \
+  --max-model-len 1048576 \
+  --max-num-seqs 6 \
+  --max-num-batched-tokens 8192 \
+  --gpu-memory-utilization 0.78 \
+  --enable-prefix-caching \
+  --speculative-config '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}' \
+  --tokenizer-mode deepseek_v4 \
+  --distributed-executor-backend mp \
+  --tool-call-parser deepseek_v4 --enable-auto-tool-choice \
+  --reasoning-parser deepseek_v4 \
+  --default-chat-template-kwargs '{"thinking":false}' \
+  --nnodes 2 --node-rank <0|1> \
+  --master-addr <head-fabric-ip> --master-port <port>
+```
+
+### What changed from the 2026-07-04 profile, and why
+
+| knob | 2026-07-04 | now | why |
+| --- | ---: | ---: | --- |
+| `max-model-len` | 350000 | **1048576** | 1M is the model's calibrated YaRN ceiling; the KV pool supports it at this gmu. |
+| `max-num-seqs` | 12 | **6** | 6 measured better under real traffic and leaves per-request KV headroom; 12 is a known trigger for the memory-pressure class of crash in issue #8. |
+| `gpu-memory-utilization` | 0.80 | **0.78** | Speculative decode allocates buffers on the *first real request*, not at boot — 0.80 boots and passes smoke tests, then dies under traffic. See issue #8. |
+| `max-cudagraph-capture-size` | 12 | *unset* | When set it must equal `max_num_seqs x (k+1)`; leaving it unset lets vLLM derive it. A stale literal silently truncates capture under concurrency (fixed in PR #5, credit @Wpnx330). |
+| `num_speculative_tokens` | 5 | **5** (unchanged) | `k=5` is correct and worth ~24% over `k=3`. `k=7` is rejected at boot (must be a multiple of `n_predict=5`) and `k=10` boots but crashes every generation. |
+| `draft_sample_method` | probabilistic | **probabilistic** (unchanged) | Mandatory. Omitting it gives a **greedy draft**, which is the documented root cause of agent garble. Do not remove. |
+
+### Do not add these
+
+Measured on this hardware and rejected — each was neutral or worse:
+
+- `--max-model-len 200000` (65.2 vs 66.8 tok/s baseline) — smaller context buys no speed.
+- `--max-num-seqs 2` (66.3) — fewer sequences buys no single-stream speed.
+- `--max-cudagraph-capture-size 36` (65.4) — no gain when already derived correctly.
+- `--override-generation-config` — remove it entirely; `repetition_penalty` on the
+  spec-decode path is a known crash risk. Use `--generation-config vllm`.
+- **NVFP4 vs FP8 KV is a context lever, not a speed lever.** On a sibling deployment the
+  two measured identically for throughput (41.4 vs 41.5 peak). Choose it for pool size.
+
+---
+
 ## Model + image
 - **Model:** `fraserprice/DeepSeek-V4-Flash-DSpark` (in HF cache: `/cache/huggingface/fraserprice/DeepSeek-V4-Flash-DSpark`)
 - **Image (as deployed):** `vllm-dspark-runtime:mia-raf-pr1-nvfp4-probe-c-keys-concurrency-p2b`
