@@ -95,19 +95,29 @@ B12X:     84.3 tok/s ÷ 6 = 14.0 steps/s
 Both runtimes saturate the draft. The entire gap is **step time** — B12X executes a decode
 step ~9% faster.
 
-It is tempting to blame `CompilationMode.NONE` (the Anemll image trades torch.compile for
-breakable CUDA graphs). **That is not the cause.** Forcing compile back on produces:
+The two runtimes differ on **both** of the things that set step time, and it is worth being
+precise about which:
+
+| | this repo (0.21.1 + B12X) | Anemll (0.25.2) |
+| --- | --- | --- |
+| MoE backend | `Using 'B12X' Mxfp4 MoE backend` | `Using 'DEEPGEMM_MXFP4' Mxfp4 MoE backend` |
+| torch.compile | **works** — `Directly load AOT compilation…`, `torch.compile took 4.39 s` | **unsupported for this model** |
+
+On 0.25.2, asking for compile yields:
 
 ```
 `torch.compile` is turned on, but the model DeepSeek-V4-Flash-DSpark does not support it.
 ```
 
-torch.compile is simply **not available for this model** on 0.25.2, in either direction — so
-it cannot explain a difference between the two runtimes. The step-time gap is the **kernel
-stack itself**: this repo's B12X custom kernels (`VLLM_USE_B12X_MOE`,
-`VLLM_USE_B12X_WO_PROJECTION`, `VLLM_TRITON_MLA_SPARSE`, tuned W4A16 block/tile configs)
-versus stock DeepGEMM MXFP4. The custom kernels are the product, and they are why this
-recipe is worth keeping on an older vLLM.
+So this is **not** a case of the Anemll image merely choosing `CompilationMode.NONE` as a
+default you could flip back — compile is unavailable for this model on 0.25.2 in either
+direction. Meanwhile this repo's stack **does** get a compiled model, from the AOT cache, in
+about 4 seconds.
+
+The ~9% step-time gap is therefore the combination of **B12X custom kernels**
+(`VLLM_USE_B12X_MOE`, `VLLM_USE_B12X_WO_PROJECTION`, `VLLM_TRITON_MLA_SPARSE`, tuned W4A16
+block/tile configs) **plus a working compile path**. Both live on the old vLLM. That is the
+whole reason this recipe is worth keeping there rather than chasing upstream versions.
 
 ## Why decode bursts then drops (measured, not theorised)
 

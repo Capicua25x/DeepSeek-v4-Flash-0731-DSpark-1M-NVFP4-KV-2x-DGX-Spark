@@ -277,9 +277,11 @@ measurement that explains burst-then-drop, in
 [`RUNTIME-BAKEOFF-2026-07-29.md`](RUNTIME-BAKEOFF-2026-07-29.md).
 
 Short version of why: both runtimes **saturate the draft** (0.25.2 logs 100% acceptance on
-the fast prompt and still loses), so the gap is pure **step time** — 0.25.2 ships
-`CompilationMode.NONE`, trading torch.compile for breakable CUDA graphs, and on this model
-that trade costs more than it returns.
+the fast prompt and still loses), so the gap is pure **step time**. Two things set it, and
+this repo has both: the **B12X MoE kernels** (0.25.2 falls back to stock `DEEPGEMM_MXFP4`)
+and a **working torch.compile path** (`torch.compile took 4.39 s` from the AOT cache — on
+0.25.2 this model is simply unsupported by compile, in either direction). Both live on the
+older vLLM, which is why this recipe stays there.
 
 ### 2026-07-02 Keys C12 1.5M NVFP4 checkpoint
 
