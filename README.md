@@ -591,6 +591,29 @@ ceiling stays available for the rare long one. That is exactly why
 
 ## Troubleshooting
 
+ ### Container will not start / model never loads — HF cache ownership
+
+**Symptom.** The container starts and then dies (or hangs) before loading weights; no obvious
+error about the model path itself.
+
+**Cause.** The container runs as **uid 1000**. If the host HF cache directory is owned by root
+(common if a download was run under `sudo`, or the dir was created by a root-run container),
+the container cannot write its cache/lock files.
+
+**Fix** (credit: [@AndreasKunar](https://github.com/AndreasKunar), issue #9 — this fixed startup
+for him with no recipe edits at all):
+
+```bash
+sudo chown -R 1000:1000 /path/to/your/hf-cache
+```
+
+Check ownership before blaming the recipe:
+
+```bash
+ls -ld "${HF_CACHE:-$HOME/.cache/huggingface}"
+```
+
+
 ### Garble fix (2026-07-03)
 
 **Symptom.** On a cold server, the *first* prompt of a brand-new session — fired
