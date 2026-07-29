@@ -282,10 +282,10 @@ and mixed token budgets (300/500/800), 4 concurrent workers, via
 
 | | benchmark (BST prompt, temp 0) | realistic mixed traffic |
 | --- | ---: | ---: |
-| per-stream tok/s @ c4 | 38.7 | **22.1** |
-| aggregate tok/s @ c4 | 151.1 | **~87** |
+| per-stream tok/s @ c4 | 38.7 | **22.3** |
+| aggregate tok/s @ c4 | 151.1 | **88.6** |
 
-**Plan with ~87 aggregate / ~22 per-stream at c4, not 151.** The difference is not a
+**Plan with ~88 aggregate / ~22 per-stream at c4, not 151.** The difference is not a
 regression and not a config problem — it is DSpark acceptance responding to harder, more varied
 content, exactly as the per-position acceptance data predicts. The benchmark number is real;
 it just describes a prompt you will rarely send.
