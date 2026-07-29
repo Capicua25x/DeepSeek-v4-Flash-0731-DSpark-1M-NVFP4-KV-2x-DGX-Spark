@@ -260,12 +260,52 @@ no production traffic contaminated the numbers. Harness:
 | 32K | 24,900 | 10.9 | 2,284 |
 | 100K | 77,790 | 29.5 | **2,639** |
 
-KV pool at `gpu_memory_utilization=0.78`: **1,548,597 tokens**.
+KV pool at `gpu_memory_utilization=0.78`: **1,548,597 tokens** on this boot. Treat pool size
+as a per-boot figure, not a fixed property — two boots of an identical config measured
+1,385,765 and 1,533,940, an 11% swing, because available KV memory on GB10 varies with what
+else has touched unified memory. Both are far above the 1M calibrated ceiling, which is what
+matters.
 
 **The 34 → 84 tok/s spread is one server on one config.** Decode speed here is
 `steps/s x accepted-tokens-per-step`, and DSpark acceptance is content-driven, so any
 single-prompt "tok/s" claim for this model — including ours — is a statement about the
 prompt as much as the hardware. Quote the mean for planning and the peak for bragging.
+
+### Warm up before you benchmark — the first requests run ~30% slow
+
+Found while verifying a rollback, and it invalidates a lot of casual benchmarking of this
+recipe (including one of my own measurements below, which is why it is documented here rather
+than quietly fixed).
+
+Immediately after `Application startup complete`, with CUDA graphs already captured and 3
+short warm-up calls sent, the `count300` prompt measured:
+
+```
+58.5 tok/s
+```
+
+The same prompt on the same container, after ~5 long generations had passed through it:
+
+```
+run 1   83.3        run 3   83.1
+run 2   83.2        run 4   83.2
+```
+
+**58.5 → 83.3 tok/s. A 30% penalty that disappears after a few hundred tokens of real
+traffic, and it is not visible in the boot log** — the server reports itself ready, graphs are
+captured, and it answers correctly the whole time. It is simply slow for the first few
+requests.
+
+Practical consequences:
+
+- **Send real traffic before you trust a number.** A handful of 100-token warm-up calls is
+  *not* enough; it took gate-sized (500-700 token) generations to reach steady state. The
+  harness in [`benchmarks/bench_full.py`](benchmarks/bench_full.py) warms with 4 short calls
+  and takes best-of-2 per prompt, which is adequate on an engine that has been serving but
+  **not** adequate on a freshly booted one.
+- **This probably explains a chunk of the spread in reported numbers for this model.** If you
+  benchmarked right after boot you measured the cold path.
+- Steady state is genuinely stable once reached: four consecutive runs within 0.2 tok/s.
 
 ### Is there a faster runtime? (tested, no)
 
@@ -275,6 +315,11 @@ matter: **9% down on peak decode, 8% on mean, 29% down at c6.** It won c2 concur
 (+11%) and prefill at depth (+9% at 32K). Full data, plus the per-position acceptance
 measurement that explains burst-then-drop, in
 [`RUNTIME-BAKEOFF-2026-07-29.md`](RUNTIME-BAKEOFF-2026-07-29.md).
+
+Verified warm on both sides: our stack has a ~30% cold-start penalty (see above), so the
+0.25.2 figures were re-measured after heavy warming to be sure the comparison was fair —
+76.7 warm vs 77.2 cold. **0.25.2 has no meaningful cold-start penalty**; it front-loads
+autotune and warmup at boot, which the older runtime defers to first traffic. The gap is real.
 
 Short version of why: both runtimes **saturate the draft** (0.25.2 logs 100% acceptance on
 the fast prompt and still loses), so the gap is pure **step time**. Two things set it, and

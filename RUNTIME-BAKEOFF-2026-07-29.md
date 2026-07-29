@@ -58,7 +58,9 @@ story       254   8.51    29.8                                     100K     2704
 PEAK 77.2   MEAN 62.7
 ```
 
-KV pool at gmu 0.78: **1,385,765 tokens** (~11% smaller at the same budget).
+KV pool at gmu 0.78: **1,385,765 tokens** on this boot — but see
+[KV pool is not a runtime difference](#kv-pool-is-not-a-runtime-difference-retracted); a later
+boot of the *same* runtime and config reported 1,533,940, so this is not a stable figure.
 
 ## Head to head
 
@@ -73,7 +75,7 @@ KV pool at gmu 0.78: **1,385,765 tokens** (~11% smaller at the same budget).
 | prefill 8K | **1513** | 1446 | B12X +4.6% |
 | prefill 32K | 2284 | **2488** | Anemll +8.9% |
 | prefill 100K | 2639 | **2704** | Anemll +2.5% |
-| KV pool @ gmu 0.78 | **1,548,597** | 1,385,765 | B12X +11.7% |
+| KV pool @ gmu 0.78 | 1,548,597 | 1,385,765 | **no conclusion — see retraction below** |
 
 Anemll wins three things, and they are real: **c2 concurrency** (+10.8%, where 0.25's
 asynchronous scheduling helps) and **prefill at depth** (+8.9% at 32K, +2.5% at 100K). The
@@ -118,6 +120,48 @@ The ~9% step-time gap is therefore the combination of **B12X custom kernels**
 (`VLLM_USE_B12X_MOE`, `VLLM_USE_B12X_WO_PROJECTION`, `VLLM_TRITON_MLA_SPARSE`, tuned W4A16
 block/tile configs) **plus a working compile path**. Both live on the old vLLM. That is the
 whole reason this recipe is worth keeping there rather than chasing upstream versions.
+
+## KV pool is not a runtime difference (retracted)
+
+An earlier version of this document claimed B12X gave a ~11.7% larger KV pool at the same
+`gpu_memory_utilization`. **That claim was wrong and is retracted.**
+
+Re-booting the *same* Anemll runtime with the *same* config later in the session reported:
+
+```
+boot 1   GPU KV cache size: 1,385,765 tokens
+boot 3   GPU KV cache size: 1,533,940 tokens   (Available KV cache memory: 10.58 GiB)
+```
+
+An 11% swing between two boots of an identical configuration is the same magnitude as the
+"difference" I attributed to the runtime. Available KV memory on GB10 varies with what else
+has touched unified memory, so **a single boot's reported pool size is not a runtime
+property** and should not be compared across runtimes without repeated boots.
+
+Both runtimes comfortably exceed the 1M calibrated context ceiling at gmu 0.78, which is the
+only thing that actually matters here.
+
+## Warm-up asymmetry (why these numbers are comparable anyway)
+
+Worth stating because it nearly invalidated this whole comparison. Our production runtime has
+a **large cold-start penalty**: immediately after `Application startup complete`, with graphs
+captured and short warm-up calls sent, `count300` measured **58.5 tok/s**; after a few long
+generations it settled at **83.3, 83.2, 83.1, 83.2**. The Anemll baseline figures, by
+contrast, were all taken within ~1 minute of startup — so if 0.25.2 had the same penalty,
+this bake-off would have been unfairly stacked against it.
+
+It does not. Re-booted and heavily warmed (five 600-700-token generations plus short calls
+before measuring), Anemll produced:
+
+```
+76.6   76.7   76.2   76.6      → peak 76.7
+```
+
+versus **77.2** measured cold on the first boot and **77.4** on the second. **0.25.2 shows no
+meaningful cold-start penalty** — it front-loads FlashInfer autotune, sparse-MLA warmup and
+graph capture at boot, which the older runtime defers to first traffic. So the ~9% decode gap
+is real and not a warm-up artefact, and 0.25.2 deserves credit for being ready when it says
+it is ready.
 
 ## Why decode bursts then drops (measured, not theorised)
 
