@@ -337,6 +337,65 @@ Practical consequences:
   benchmarked right after boot you measured the cold path.
 - Steady state is genuinely stable once reached: four consecutive runs within 0.2 tok/s.
 
+**It is not only a boot effect — the warm state decays when the server goes idle.** Confirmed on
+the same container with no restart: after ~30 minutes idle following a 40-minute soak, `count300`
+measured **60.4 tok/s**; heavy warm-up restored it to **83.5** minutes later. So the penalty will
+hit an agent fleet after any quiet period, not just after a deploy. If you care about the first
+response after idle, keep a trickle of traffic going — and never benchmark straight after a lull.
+
+### Which prompt shapes actually reach the ceiling
+
+The headline 84.3 tok/s comes from `Print the numbers 1 to 300`, which is a toy. The useful
+question is whether any *real* output shape gets there. Measured on a warm engine (warm check
+`count300 = 83.5` immediately before the run, so these are not warm-up artefacts):
+
+| shape | tok/s | tokens | what it is |
+| --- | ---: | ---: | --- |
+| count to 300 | **83.1** | 600 | the toy baseline |
+| **bulk SQL INSERTs** | **77.7** | 1200 | 60 rows, fixed template |
+| 20 identical dataclasses | 75.5 | 814 | DTO/boilerplate generation |
+| `.env` with 60 entries | 74.8 | 780 | config generation |
+| CRUD endpoints, 8 resources | 72.2 | 1400 | FastAPI skeleton, 4 routes each |
+| CSV → JSON | 72.0 | 305 | transformation |
+| JSON fixtures, 60 objects | 69.7 | 1200 | test data |
+| CSV → markdown table | 65.4 | 199 | transformation |
+| add type hints to 5 functions | 59.1 | 134 | small edit |
+| original prose | 31.1 | 292 | control |
+
+**Nothing real reaches 84.** The practical ceiling for useful work is **~78**, and this is the
+prompt that got there:
+
+```
+Generate 60 SQL INSERT statements for table users(id, email, created_at).
+Use the exact form: INSERT INTO users (id, email, created_at) VALUES (N,
+'user_N@example.com', '2026-01-01'); — ids 1 to 60, one per line. SQL only.
+```
+
+Two levers, and the second is the one people miss.
+
+**1. Rigid repeated structure.** Give the template and say "the exact form". The draft model
+locks onto the pattern after the second row and then predicts all `k=5` tokens ahead. Bulk
+INSERTs, DTOs, config files and fixtures all land in the mid-to-high 70s.
+
+**2. Ask for long output — short requests are mathematically capped.** `add-types` scored 59.1,
+but it only produced **134 tokens**. Fixed per-request overhead is roughly 0.5 s, so:
+
+```
+134 tokens / 80 tok/s  +  0.5 s overhead  =  2.18 s   →  61 tok/s apparent
+measured: 2.27 s                                      →  59.1 tok/s
+```
+
+That number is overhead amortisation, **not** poor acceptance. A 134-token request cannot post a
+high tok/s no matter how predictable it is. The 1200-1400-token runs are where the real ceiling
+shows up — so if you are benchmarking, use long generations, and if you are quoting a number,
+say how many tokens it was.
+
+Harness: [`benchmarks/realwork_peak.py`](benchmarks/realwork_peak.py).
+
+**Keep this in proportion.** 78 tok/s is the good end of the distribution. Mixed agent traffic
+averages **~22 tok/s per-stream / ~88 aggregate at c4** (see above) — that is the number to plan
+capacity with. The 78 is what you get when the work happens to be templated bulk generation.
+
 ### Is there a faster runtime? (tested, no)
 
 vLLM **0.25.2** (`ghcr.io/anemll/dspark-vllm-gx10:0.1.1`, torch 2.11/cu13) was booted on the
