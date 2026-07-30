@@ -4,6 +4,97 @@ This note is for anyone who already cloned or deployed this repo and then saw
 agent traffic degrade into repeated characters, Chinese drift, leaked tool/XML
 prompt text, or unstable loops.
 
+## ⚠️ FIRST: is Patch 3 actually loaded?
+
+**If you still get garble after applying everything else in this document, this is why.**
+
+Patch 3 (credit **@roady001**, issue #3) is the **cold-start garble root-cause fix**. It lives in
+the scheduler, not in any sampling flag, so none of the settings below can substitute for it.
+
+**The canonical image `vllm-dspark-runtime:dspark-nvfp4-stage-c` has it baked in.** But the
+older `probe-c-p2b` image **predates Patch 3** and needs it bind-mounted. A pre-Patch-3 image
+boots clean, passes smoke tests, and serves correctly on warm requests — it only garbles on
+**cold prefill**, which is why it survives every quick check and then bites in production.
+
+### Check it in 5 seconds
+
+```bash
+docker exec <container> grep -c is_prefill_chunk \
+  /opt/env/lib/python3.12/site-packages/vllm/v1/core/sched/scheduler.py
+```
+
+- `5` → Patch 3 is loaded. Good.
+- `0` → **Patch 3 is MISSING.** Fix it before changing anything else.
+
+### Fix
+
+```bash
+# on every node
+cp recipe/overlay/vllm/v1/core/sched/scheduler.py /var/tmp/patch3-scheduler.py
+
+# add to the container run
+-v /var/tmp/patch3-scheduler.py:/opt/env/lib/python3.12/site-packages/vllm/v1/core/sched/scheduler.py:ro
+```
+
+### What it fixes, and what it looks like when it's missing
+
+Patch 3 guards the spec-placeholder resize so it only runs for requests the AsyncScheduler
+would actually give placeholders. Without the guards the resize runs for **every** running
+request — including ones mid **chunked prefill** — attaching spec tokens to the final prompt
+chunk of a long **cold** resume and corrupting the prompt tail.
+
+Symptoms, all of which we measured on a 2x DGX Spark with a ~20k-token agent prompt:
+
+- reply opens with **prompt echo** or **leaked tool/skill-schema text**
+- reply **starts mid-word** (`'s, and tools.'`, `'ThatGaming: Skills for...'`)
+- sometimes leading special tokens (`<|begin_of_sentence|>#`)
+- **recovers as soon as the request is warm** — prefix-cache hits never fail
+
+### Measured, 2026-07-30 (2x DGX Spark, ~18k-token system prompt + 58 tools)
+
+Forced cold prefill on every request, real captured agent payload:
+
+| config | cold-prefill failures |
+| --- | ---: |
+| k=5, as-shipped | 11/12 |
+| k=5 + `VLLM_DSPARK_CONFIDENCE_THRESHOLD=0.1` | 12/12 |
+| **k=3** | **10/10** |
+| k=5 + every other setting in this document | 10/10 |
+| **k=5 + Patch 3** | **0/10** ✅ |
+| **k=3 + Patch 3** | **0/10** ✅ |
+
+Warm requests: **0/19 failures in every configuration.**
+
+**Two conclusions worth internalising:**
+
+1. **`k` is not the variable.** Dropping `num_speculative_tokens` from 5 to 3 is a widely-repeated
+   "fix" for this garble. It does not work — k=3 failed 10/10 on cold prefill. If it appeared to
+   help you historically, you almost certainly had Patch 3 loaded and k=3 got the credit. Use
+   **k=5** (with Patch 3) and keep the ~24% decode that k=3 costs you.
+2. **A clean 5-prompt gate proves nothing here.** Warm requests never fail. You must force a cold
+   prefill to see it — see the reproducer below.
+
+### Reproducer
+
+[`benchmarks/replay_hermes.py`](benchmarks/replay_hermes.py) replays a captured agent request and
+forces a cold prefill each iteration by prepending a unique nonce to the system prompt (busting
+the prefix cache), then scores the output for prompt echo, schema dumps, mid-word starts and
+special-token leakage.
+
+```bash
+# capture real agent traffic first (transparent proxy, records prompt+response)
+UPSTREAM=http://<lane>:8888 PORT=8890 python3 benchmarks/garble_tap.py
+#   ... point your agent at :8890 for a while ...
+
+# then replay it cold against any candidate config
+URL=http://<lane>:8888/v1 N=10 COLD=1 python3 benchmarks/replay_hermes.py
+```
+
+Patch 3 also made cold prefills **faster** in our runs (~36s → ~12s), because spec tokens are no
+longer being wrongly attached to prefill chunks.
+
+---
+
 The fix is not to drop DeepSeek V4 Flash DSpark, switch to a smaller fallback,
 or move production to fp8. The current stable path keeps:
 
