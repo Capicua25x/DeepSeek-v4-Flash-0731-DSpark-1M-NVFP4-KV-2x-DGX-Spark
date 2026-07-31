@@ -1,5 +1,33 @@
 # DEFAULT CONFIG — DS4-Flash + DSpark, verified live 2026-07-04 (2× DGX Spark)
 
+> **2026-07-31 - four things on this page are superseded.**
+>
+> 1. **Apply [Patch 4](patches/0004-dspark-shared-expert-gate-up-proj.patch).** vLLM's DSpark draft
+>    loader silently drops the draft's always-on shared expert (12 tensors). Without it you run at
+>    roughly half speed with *perfect output quality*. Measured: 32.7 -> 55.4 tok/s mean, acceptance
+>    25.7% -> 60.2%. See [`DSPARK-SHARED-EXPERT-FIX.md`](DSPARK-SHARED-EXPERT-FIX.md).
+> 2. **`k=7` does not merely fail at boot - it crashes on first generation** once the boot guard is
+>    patched out (`size of tensor a (7) must match tensor b (5)`). The drafter emits exactly 5 per
+>    pass. Also, the divisibility rule below is imprecise: the guard only fires when `k > n_predict`,
+>    which is why `k=3`/`k=4` boot. Accurate rule: **`k <= 5`, or a multiple of 5.**
+> 3. **`draft_sample_method` is a no-op for DSpark.** The rows below that call `probabilistic`
+>    "mandatory" / "do NOT switch to greedy", and the "BEATS greedy: 49 vs 32 tok/s mixed" claim,
+>    are **withdrawn**. In this runtime the DSpark proposer only populates draft probabilities when
+>    `VLLM_DSPARK_EXPORT_DRAFT_PROBS=1` (`vllm/v1/spec_decode/dspark_proposer.py`), so the rejection
+>    sampler takes the same `NO_DRAFT_PROBS` path for greedy and probabilistic. Re-measured
+>    2026-07-31: no difference. The cold-start garble is fixed by Patch 3, not by this flag — see
+>    [`docs/PATCHES.md`](docs/PATCHES.md) ("not needed to fix this garble once the scheduler guard
+>    is in place"). The setting is harmless to leave in place.
+> 4. **The command blocks below still point at the preview checkpoint**
+>    (`/cache/huggingface/fraserprice/DeepSeek-V4-Flash-DSpark`). This repo now targets
+>    `DeepSeek-V4-Flash-0731`; substitute your 0731 weights path. Everything else in the ⭐ block
+>    still matches what is served today except that the live server also passes
+>    `--reasoning-config` and `--enable-flashinfer-autotune`.
+>
+> Throughput and acceptance figures on this page were measured on the **preview** checkpoint with the
+> **stock (buggy) loader**.
+
+
 This is the **canonical, verified-working config** — captured live from the running
 deployment before teardown. Reproduce this exactly to get the benchmarked result.
 

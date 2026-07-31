@@ -5,6 +5,103 @@
 > KV cache — 1M-token calibrated context (pushed to 1.5M), clean under agent
 > concurrency.
 
+---
+
+## Updating to the official `DeepSeek-V4-Flash-0731` release (2026-07-31)
+
+> Everything else in this README was measured on the **preview** checkpoint,
+> `fraserprice/DeepSeek-V4-Flash-DSpark`, and still stands. This section is for
+> people moving to DeepSeek's official `deepseek-ai/DeepSeek-V4-Flash-0731` release.
+
+**If you swap in the 0731 weights and change nothing else, decode throughput roughly halves —
+with no drop in output quality.** That combination is the tell, and it sends you looking in the
+wrong place. It is not the weights and not a config regression: vLLM's DSpark draft weight loader
+silently drops twelve tensors, and 0731 is far more sensitive to the loss than the preview was.
+
+### What to change
+
+Apply **[Patch 4](patches/0004-dspark-shared-expert-gate-up-proj.patch)** on top of your existing
+setup. Two lines, no rebuild — bind-mount it read-only:
+
+```bash
+-v /path/to/patched/dspark.py:/opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark.py:ro
+```
+
+Everything else in the recipe carries over unchanged: same runtime, same `k=5`, same
+`nvfp4_ds_mla` KV, same 1M context, same Patch 3. Point `--model` at the 0731 directory and go.
+
+### What it is
+
+The draft's shared expert is a `DeepseekV4MLP` whose projections are `gate_up_proj` (fed by
+checkpoint tensors `w1` and `w3`) and `down_proj` (fed by `w2`). The draft loader renames only
+`w2`, and its stacked-parameter mapping carries only the two attention entries — so `w1`/`w3`
+match nothing and hit `logger.debug("Skipping unknown DSpark weight")`, which is invisible at
+INFO. Twelve tensors, across all three draft stages:
+
+```
+model.layers.{43,44,45}.ffn.shared_experts.gate_up_proj.{weight,weight_scale_inv}
+```
+
+`n_shared_experts: 1` and that expert is **always-on** — summed into every token unconditionally.
+So each draft stage ran with its always-active expert uninitialised. Because the target model
+still verifies every token, output stays correct; only acceptance collapses. The target's own
+loader has the two rows the draft loader is missing
+([`model.py:1952-1953`](DSPARK-SHARED-EXPERT-FIX.md)).
+
+### Measured on 0731 (2× DGX Spark, TP=2, k=5, nvfp4 KV, 1M context)
+
+| | accept | tok/step | steps/s | mean tok/s | peak tok/s |
+|---|---|---|---|---|---|
+| 0731, stock loader | 25.7% | 2.28 | 14.4 | 32.7 | 42.0 |
+| **0731, Patch 4** | **60.2%** | **4.01** | 13.8 | **55.4** | **66.1** |
+
+Per-position acceptance `0.631/0.282/0.181/0.114/0.067` → `0.826/0.725/0.572/0.471/0.399`.
+`steps/s` is unchanged — the entire deficit was draft acceptance. Pooled over ~35 min of real
+agent traffic the patched server holds **56.1%** acceptance (mean accepted length 4.0–5.0 of 5).
+
+By content, patched: structured/repetitive **78.3% / 66.1 tok/s**, code generation
+**68.7% / 62.2**, prose reasoning **33.7% / 37.8**. Acceptance is content-driven, so a single
+headline number without the content mix behind it is not meaningful.
+
+**Scope of the bug.** The preview checkpoint carries the same twelve tensors and is therefore also
+affected, but we have not measured preview with Patch 4 applied, so the size of its gain is
+unknown. Note the preview measured 57.8% acceptance *unpatched* — close to where 0731 lands
+*patched* — so whatever the mechanism, 0731 is hit much harder. That asymmetry is not yet explained.
+
+Full write-up, evidence, and how to check whether you are affected:
+**[`DSPARK-SHARED-EXPERT-FIX.md`](DSPARK-SHARED-EXPERT-FIX.md)**
+
+### Two other things that changed with 0731
+
+**Benchmark with `stream: false`.** Under speculative decoding vLLM emits at most one SSE chunk
+per decode *step*, carrying every token accepted in that step. Counting streamed content deltas
+therefore measures **steps/s, not tokens/s**, and under-reports by the acceptance length — 14.7
+vs 60.1 tok/s on the identical request. Read `usage.completion_tokens`, or divide server-side
+`vllm:generation_tokens_total` by wall time.
+
+**`k` is still 5.** `dspark_block_size = 5` in the 0731 checkpoint exactly as in the preview.
+DeepSeek's 0731 model card recommends `num_speculative_tokens: 7`; that does not work here. The
+boot-time divisibility guard can be patched out, but the run then fails on first generation
+because the drafter emits exactly `dspark_block_size` tokens per pass and multi-block drafting is
+not implemented — the same reason `k=10` boots and then crashes. `k=7` is fine on drafters that
+are natively deeper (MiMo-V2.5 DFlash, GLM-5.2's DSpark speculator, Inkling); DeepSeek-V4-Flash is
+not one of them.
+
+### Ruled out by measurement, so you don't repeat it
+
+| tried | result |
+|---|---|
+| `draft_sample_method` greedy vs probabilistic | no change — it is a **no-op** on the DSpark path (the proposer never populates draft probs unless `VLLM_DSPARK_EXPORT_DRAFT_PROBS=1`) |
+| `fp8_ds_mla` vs `nvfp4_ds_mla` KV | no change to acceptance — pick for pool size |
+| temperature 0 vs 0.7 | no change |
+| B12X kernels off | worse (steps/s 14.4 → 10.7), then crashed |
+| dedicated nodes, zero competing traffic | no change — contention was never involved |
+
+If **drafted** throughput looks healthy while **accepted** throughput is low, that is an
+acceptance problem: check Patch 4 before anything else.
+
+---
+
 ## TL;DR
 
 > **Full re-characterisation 2026-07-29.** Every number below was re-measured on this
