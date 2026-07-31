@@ -1,9 +1,16 @@
-# DeepSeek V4 Flash (DSpark) on 2x DGX Spark — 1M context, NVFP4 KV, 84 tok/s peak
+# DeepSeek V4 Flash (DSpark) on 2x DGX Spark — 1M context, NVFP4 KV
 
-> Self-contained two-node DGX Spark recipe for serving `DeepSeek-V4-Flash-DSpark`
-> with vLLM TP=2, DSpark speculative decoding, and an experimental `nvfp4_ds_mla`
-> KV cache — 1M-token calibrated context (pushed to 1.5M), clean under agent
-> concurrency.
+> Self-contained two-node DGX Spark recipe for serving DeepSeek-V4-Flash with vLLM
+> TP=2, DSpark speculative decoding, and an experimental `nvfp4_ds_mla` KV cache —
+> 1M-token calibrated context (pushed to 1.5M), clean under agent concurrency.
+>
+> **Covers both checkpoints:**
+> - **`deepseek-ai/DeepSeek-V4-Flash-0731`** (official release) — **78 tok/s peak, ~55 typical.**
+>   Requires [Patch 4](patches/0004-dspark-shared-expert-gate-up-proj.patch); without it you get
+>   roughly half speed at unchanged output quality. **Start here →
+>   [Updating to the official 0731 release](#updating-to-the-official-deepseek-v4-flash-0731-release-2026-07-31)**
+> - **`fraserprice/DeepSeek-V4-Flash-DSpark`** (preview) — 84.3 tok/s peak. Everything in this
+>   README below the 0731 section was measured on this checkpoint and still stands.
 
 ---
 
@@ -54,6 +61,13 @@ loader has the two rows the draft loader is missing
 |---|---|---|---|---|---|
 | 0731, stock loader | 25.7% | 2.28 | 14.4 | 32.7 | 42.0 |
 | **0731, Patch 4** | **60.2%** | **4.01** | 13.8 | **55.4** | **66.1** |
+
+On the repo's long-standing peak-finder prompt shape (`"Count from 1 to 300, separated by
+commas."`, temp 0, warm) the patched 0731 server reaches **78.4 tok/s at 98.9% acceptance —
+5.95 accepted tokens per step out of a maximum 6.** That is what a correctly loaded DSpark
+drafter looks like: it is accepting essentially every token it proposes. The same prompt
+immediately after a cold start measures 56.8 tok/s, which is the documented cold-start penalty,
+not a config difference.
 
 Per-position acceptance `0.631/0.282/0.181/0.114/0.067` → `0.826/0.725/0.572/0.471/0.399`.
 `steps/s` is unchanged — the entire deficit was draft acceptance. Pooled over ~35 min of real
