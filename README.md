@@ -795,23 +795,28 @@ Core vLLM flags:
 - `--max-model-len 1048576`
 - `--max-num-seqs 6`
 - `--max-num-batched-tokens 8192`
-- `--max-cudagraph-capture-size 6` (must equal `--max-num-seqs`)
+- `--max-cudagraph-capture-size 36` (derived: `max-num-seqs × (num_speculative_tokens + 1)` = 6 × 6)
 - `--gpu-memory-utilization 0.80`
 - `--enable-prefix-caching`
 - `--async-scheduling`
 - `--enable-chunked-prefill`
 - `--generation-config vllm` (no `--override-generation-config`)
-- `--speculative-config '{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic"}'`
-  - **This 1M / `max-num-seqs 6` profile MUST use `num_speculative_tokens: 3`.** Spec-decode requires the
-    cudagraph capture sizes to be a multiple of `num_speculative_tokens + 1`. At `max-num-seqs 6` vLLM's
-    ladder is `[1,2,4]`: spec 3 → multiple of **4** (the `4` satisfies it ✓); **spec 5 → multiple of 6,
-    which `[1,2,4]` cannot satisfy → `No valid cudagraph sizes` and engine init FAILS.** (Verified 2026-07-04.)
-  - **`num_speculative_tokens: 5` is faster but requires `max-num-seqs` to be a multiple of 6** (e.g. 12) so
-    the ladder yields a valid captured size. That's the lower-context / higher-concurrency lane — see
-    [`DEFAULT-CONFIG.md`](DEFAULT-CONFIG.md) (350K ctx, seqs 12, spec 5), benchmarked **~49 tok/s mixed /
-    54–60 structured / ~75 best-case**; spec 3 ≈ 40 avg. At full 1M the seqs-12 KV won't fit on 2 Sparks,
-    so **1M pairs with seqs 6 + spec 3**; the seqs-12 + spec-5 lane pairs with a shorter context.
+- `--speculative-config '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}'`
+  - **Use `num_speculative_tokens: 5` on this 1M / `max-num-seqs 6` profile.** It is worth roughly **+24%**
+    over `k=3`. See [`DEFAULT-CONFIG.md`](DEFAULT-CONFIG.md) and
+    [`SPEED-UPDATE-2026-07-29.md`](SPEED-UPDATE-2026-07-29.md) (83.4 tok/s peak, 74.1 mean).
+  - Set `--max-cudagraph-capture-size` explicitly to `max-num-seqs × (k + 1)` = **36**. The shipped
+    `docker-compose.dspark.yml` derives this for you.
   - Keep `draft_sample_method:probabilistic` — it beats greedy for DSpark's calibrated draft heads.
+
+  > ⚠️ **Corrected 2026-08-05.** This section previously stated that the 1M / seqs-6 profile **MUST** use
+  > `num_speculative_tokens: 3`, and that `k=5` would fail engine init with `No valid cudagraph sizes`
+  > (verified 2026-07-04). **That is no longer true and the reasoning was incomplete.** The original claim
+  > assumed `--max-cudagraph-capture-size` was pinned to `max-num-seqs` (6), leaving vLLM's `[1,2,4]` ladder
+  > with nothing divisible by `k+1 = 6`. The fix is not to lower `k` — it is to set the capture size to
+  > `seqs × (k+1) = 36`, which is what the compose file now does. `k=3` still boots, it is just the slow
+  > path. Anyone who benchmarked this repo from the README before this date was measuring `k=3`; re-run
+  > with `k=5` before publishing numbers anywhere.
 
 Key runtime env:
 
