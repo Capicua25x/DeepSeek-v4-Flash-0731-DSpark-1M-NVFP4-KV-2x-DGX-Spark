@@ -1,0 +1,74 @@
+{
+ "model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+ "endpoint": "opencode-zen-paid",
+ "provider_fingerprint": "extra_sampling_logprobs/last_activation schema (≈fireworks, sin confirmación oficial)",
+ "protocol": {
+  "version": "v3",
+  "reasoning_effort": "max",
+  "temperature": 0.6,
+  "top_p": 0.95,
+  "seeds": [
+   1234,
+   2345,
+   3456
+  ],
+  "harness": "lm-eval 0.4.12",
+  "date_frozen": "2026-08-05",
+  "budgets": {
+   "mmlu_pro": 24000,
+   "aime25": 30000,
+   "ifeval": 16000,
+   "gpqa_diamond": 20000
+  },
+  "limits": {
+   "mmlu_pro": 80,
+   "aime25": 30,
+   "ifeval": 80,
+   "gpqa_diamond_cot_zeroshot": 60
+  }
+ },
+ "metric_keys": {
+  "mmlu_pro": "exact_match,custom-extract",
+  "aime25": "exact_match,none",
+  "ifeval": "prompt_level_strict_acc,none",
+  "gpqa_diamond_cot_zeroshot": "exact_match,flexible-extract"
+ },
+ "results": {
+  "aime25": {
+   "median": 0.7,
+   "runs": [
+    0.7,
+    0.7,
+    0.7333
+   ],
+   "n_runs": 3
+  },
+  "ifeval": {
+   "median": 0.9375,
+   "runs": [
+    0.9,
+    0.9375,
+    0.9375
+   ],
+   "n_runs": 3
+  },
+  "gpqa_diamond_cot_zeroshot": {
+   "median": 0.7333,
+   "runs": [
+    0.6667,
+    0.7333,
+    0.7667
+   ],
+   "n_runs": 3
+  },
+  "mmlu_pro": {
+   "median": 0.8366,
+   "runs": [
+    0.8259,
+    0.8366,
+    0.8411
+   ],
+   "n_runs": 3
+  }
+ }
+}
