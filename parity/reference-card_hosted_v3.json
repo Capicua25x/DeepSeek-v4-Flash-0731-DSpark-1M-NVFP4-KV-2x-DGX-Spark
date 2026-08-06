@@ -19,14 +19,16 @@
    "aime25": 30000,
    "ifeval": 16000,
    "gpqa_diamond": 20000,
-   "gsm8k": 14000
+   "gsm8k": 14000,
+   "aa_lcr": 6000
   },
   "limits": {
    "mmlu_pro": 80,
    "aime25": 30,
    "ifeval": 80,
    "gpqa_diamond_cot_zeroshot": 60,
-   "gsm8k": 50
+   "gsm8k": 50,
+   "aa_lcr": 100
   }
  },
  "metric_keys": {
@@ -34,7 +36,8 @@
   "aime25": "exact_match,none",
   "ifeval": "prompt_level_strict_acc,none",
   "gpqa_diamond_cot_zeroshot": "exact_match,flexible-extract",
-  "gsm8k": "exact_match,flexible-extract"
+  "gsm8k": "exact_match,flexible-extract",
+  "aa_lcr": "judge_equivalence(ds4-flash, shared)"
  },
  "results": {
   "aime25": {
@@ -81,6 +84,16 @@
     1.0
    ],
    "n_runs": 3
+  },
+  "aa_lcr": {
+   "median": 0.65,
+   "runs": [
+    0.65
+   ],
+   "n_runs": 1
   }
+ },
+ "notes": {
+  "aa_lcr": "juez compartido ds4-flash (oficial no especificado); n_runs=1 por coste de input (~10M tok); contexts ~100K tok"
  }
 }
