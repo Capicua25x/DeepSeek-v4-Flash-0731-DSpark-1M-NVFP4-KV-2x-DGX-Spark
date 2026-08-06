@@ -18,20 +18,23 @@
    "mmlu_pro": 24000,
    "aime25": 30000,
    "ifeval": 16000,
-   "gpqa_diamond": 20000
+   "gpqa_diamond": 20000,
+   "gsm8k": 14000
   },
   "limits": {
    "mmlu_pro": 80,
    "aime25": 30,
    "ifeval": 80,
-   "gpqa_diamond_cot_zeroshot": 60
+   "gpqa_diamond_cot_zeroshot": 60,
+   "gsm8k": 50
   }
  },
  "metric_keys": {
   "mmlu_pro": "exact_match,custom-extract",
   "aime25": "exact_match,none",
   "ifeval": "prompt_level_strict_acc,none",
-  "gpqa_diamond_cot_zeroshot": "exact_match,flexible-extract"
+  "gpqa_diamond_cot_zeroshot": "exact_match,flexible-extract",
+  "gsm8k": "exact_match,flexible-extract"
  },
  "results": {
   "aime25": {
@@ -67,6 +70,15 @@
     0.8259,
     0.8366,
     0.8411
+   ],
+   "n_runs": 3
+  },
+  "gsm8k": {
+   "median": 1.0,
+   "runs": [
+    0.98,
+    1.0,
+    1.0
    ],
    "n_runs": 3
   }
