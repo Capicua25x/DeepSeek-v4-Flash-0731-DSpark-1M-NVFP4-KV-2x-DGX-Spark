@@ -11,6 +11,12 @@
 >   [Updating to the official 0731 release](#updating-to-the-official-deepseek-v4-flash-0731-release-2026-07-31)**
 > - **`fraserprice/DeepSeek-V4-Flash-DSpark`** (preview) — 84.3 tok/s peak. Everything in this
 >   README below the 0731 section was measured on this checkpoint and still stands.
+>
+> **Censored or uncensored — your choice, same recipe.** The stock DeepSeek weights are the
+> default. If you want the refusal-free build, Keys (drowzeys) publishes an abliterated 0731
+> that drops straight in: same image, same patches, same flags, same context. Only `--model`
+> changes. Access to it is gated and carries a Responsible Use Agreement.
+> **→ [Model choice: censored or uncensored](#model-choice-censored-or-uncensored)**
 
 ---
 
@@ -239,6 +245,54 @@ Keep these `.env.dspark` values unless you are deliberately experimenting:
 - `./prepare-dspark-model-cache.sh` downloads the snapshot into `HF_CACHE`,
   verifies every safetensor shard is present, and mirrors the download to the
   worker node.
+
+### Model choice: censored or uncensored
+
+Two checkpoints, one recipe. **Nothing in the launch flow changes between them** — same
+image, same patches, same `k=5`, same `nvfp4_ds_mla` KV cache, same 1M context, same
+`gpu-memory-utilization`. You point `--model` at whichever directory you downloaded.
+
+| | Censored (default) | Uncensored (abliterated) |
+|---|---|---|
+| HF repo | [`deepseek-ai/DeepSeek-V4-Flash-0731`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731) | [`drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32`](https://huggingface.co/drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32) |
+| Author | DeepSeek-AI | **Keys** (`drowzeys`) |
+| Base | — | 0731 GA @ `9e165c30` |
+| Access | open | **gated** — access request + Responsible Use Agreement |
+| Safety refusals | stock | removed (reported 32/32 bypass on a hard refusal suite) |
+| DSpark MTP draft modules | stock | **stock, unedited** |
+| Patch 4 | required | required |
+| On-disk | ~156 GB | ~156 GB |
+
+**Getting the uncensored weights:**
+
+```bash
+hf download drowzeys/keys-DeepSeekV4-Flash-GA-0731-Dspark-Abliterated-32-32 \
+  --local-dir /var/tmp/models/ds4-0731-abliterated
+```
+
+That download will 403 until you have been granted access. Request it on the model page
+and accept the Responsible Use Agreement first. In short: 18 or older; no sexual
+exploitation or endangerment of minors; no self-harm or suicide-promotion content; no
+harassment, doxxing, or fraud; nothing illegal in your jurisdiction; you are accountable
+for what you prompt it to produce; and the upstream DeepSeek license still applies.
+**Read the terms on the model card itself, not this summary — that page is authoritative.**
+You are the one supplying the guardrails a refusal-trained model would have supplied, so
+plan your filtering, review, and access control before you put it in front of anything.
+
+**What the abliteration actually does.** A single refusal direction is projected out of 33
+`attn.wo_b` tensors across layers 10–42 (λ = 3.5, k = 1, mean relative Frobenius delta
+≈ 0.056). The `float8_e8m0fnu` scales are preserved. **The DSpark MTP draft modules are
+deliberately left untouched**, which is the part that matters for this recipe: the draft
+stages are exactly what [Patch 4](#updating-to-the-official-deepseek-v4-flash-0731-release-2026-07-31)
+repairs and what your acceptance rate rides on. Edited draft weights would land you back in
+that same class of problem.
+
+**What we run.** Our lane 1 serves the abliterated weights on this exact recipe with no
+config changes. We have **not** run a controlled censored-vs-uncensored throughput A/B, so
+read every benchmark number in this README as measured on the stock weights. The edit
+touches 33 attention output projections and leaves the draft stages alone, so there is no
+mechanism we are aware of that would move decode speed — but that is reasoning, not a
+measurement, and we are not going to present it as one.
 
 ### Image / build
 
