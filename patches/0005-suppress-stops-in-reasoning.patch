@@ -1,0 +1,120 @@
+From: Capicua25x
+Subject: [PATCH 0005] detokenizer: don't evaluate client stop strings inside the
+ reasoning segment
+
+Fixes null/empty content on think-in-prompt models when the client sends stop
+strings. See issue #18.
+
+WHY
+  vLLM's v1 detokenizer checks client `stop` strings against the whole output
+  stream. With think-in-prompt templates (DeepSeek V4, Qwen3) generation begins
+  INSIDE the reasoning segment, and chain-of-thought naturally restates phrases
+  like "Question:". Any harness that sends stop sequences -- lm-evaluation-harness
+  sends stop[:4] on every request -- decapitates the reasoning mid-<think>.
+  `</think>` never arrives, so the reasoning parser yields content = null.
+
+  Hosted reference deployments of the same checkpoints are immune because they
+  scope stop strings to content. That behaviour gap is the bug.
+
+WHAT
+  Per-request guard, no configuration required: at detokenizer construction, if
+  the request's LAST PROMPT TOKEN is `<think>`, stop strings stay dormant until
+  `</think>` appears in the output. EOS and max_tokens are unaffected.
+  Non-thinking requests are untouched by construction.
+  Opt-out: VLLM_SUPPRESS_STOPS_IN_REASONING=0
+
+MEASURED (2x DGX Spark GB10, TP=2, k=5 profile, unsloth/DeepSeek-V4-Flash-0731)
+  decapitation reproducer (seed+stop)   43 tok, content null  ->  344 tok, correct
+  stop honored on non-thinking request  ok                    ->  ok (exact cut)
+  GSM8K n=50, temp 0.6 / top_p 0.95     8-15 nulls, 0.66-0.84 ->  1 null, 0.98
+
+  The residual single null is mechanism (B) in issue #18 (marginal-stability
+  runaway), which this patch does not address and does not claim to.
+
+APPLIES TO
+  vLLM 0.21.1rc1.dev339+g1967a5627bc3, as shipped in
+  vllm-dspark-runtime:dspark-nvfp4-stage-c.
+  If `patch` rejects a hunk, the runtime moved -- regenerate rather than force.
+
+TWO-NODE NOTE
+  start-deepseek-v4-flash-dspark.sh syncs the compose and env files to the
+  worker, but NOT bind-mounted patch files. This file must exist at the same
+  path on BOTH nodes or the worker silently runs unpatched, which produces
+  confusing half-fixed results.
+
+DOGFOOD
+  Deployed 2026-08-05, run under real agent traffic for four days before
+  submitting. No stop-decapitation observed since.
+
+--- a/vllm/v1/engine/detokenizer.py
++++ b/vllm/v1/engine/detokenizer.py
+@@ -59,10 +59,31 @@
+ 
+         if USE_FAST_DETOKENIZER and isinstance(tokenizer, PreTrainedTokenizerFast):
+             # Fast tokenizer => use tokenizers library DecodeStream.
+-            return FastIncrementalDetokenizer(tokenizer, request)
+-
+-        # Fall back to slow python-based incremental detokenization.
+-        return SlowIncrementalDetokenizer(tokenizer, request)
++            detok = FastIncrementalDetokenizer(tokenizer, request)
++        else:
++            # Fall back to slow python-based incremental detokenization.
++            detok = SlowIncrementalDetokenizer(tokenizer, request)
++        IncrementalDetokenizer._maybe_enable_reasoning_guard(
++            detok, tokenizer, request
++        )
++        return detok
++
++    @staticmethod
++    def _maybe_enable_reasoning_guard(detok, tokenizer, request) -> None:
++        # PATCH(stop-in-reasoning): see BaseIncrementalDetokenizer.__init__.
++        import os
++        if os.environ.get("VLLM_SUPPRESS_STOPS_IN_REASONING", "1") == "0":
++            return
++        try:
++            stop = getattr(detok, "stop", None)
++            ptids = getattr(request, "prompt_token_ids", None)
++            if not stop or not ptids:
++                return
++            think_id = tokenizer.convert_tokens_to_ids("<think>")
++            if think_id is not None and think_id >= 0 and ptids[-1] == think_id:
++                detok._reasoning_stop_guard = True
++        except Exception:
++            pass
+ 
+ 
+ class BaseIncrementalDetokenizer(IncrementalDetokenizer, ABC):
+@@ -89,6 +110,15 @@
+             self.stop_buffer_length = 0
+         self._last_output_text_offset: int = 0
+ 
++        # PATCH(stop-in-reasoning): when the prompt ends with the reasoning
++        # opening token (prompt-side <think>, as DeepSeek-V4/Qwen3 templates do),
++        # client stop strings must not match inside the reasoning segment --
++        # matching there truncates mid-think and yields content=None. Stops are
++        # suppressed until '</think>' appears in the output. Disable with
++        # VLLM_SUPPRESS_STOPS_IN_REASONING=0.
++        self._reasoning_stop_guard: bool = False
++        self._reasoning_closed: bool = False
++
+         # Generation data
+         self.output_text = ""
+ 
+@@ -126,8 +156,16 @@
+             self.token_ids.append(skipped_stop_token_id)
+ 
+         # 2) Evaluate stop strings.
++        # PATCH(stop-in-reasoning): keep stops dormant while reasoning is open.
++        if self._reasoning_stop_guard and not self._reasoning_closed:
++            if "</think>" in self.output_text[max(0, stop_check_offset - 16):]:
++                self._reasoning_closed = True
+         stop_string = None
+-        if self.stop and self.num_output_tokens() > self.min_tokens:
++        if (
++            self.stop
++            and self.num_output_tokens() > self.min_tokens
++            and (not self._reasoning_stop_guard or self._reasoning_closed)
++        ):
+             stop = check_stop_strings(
+                 output_text=self.output_text,
+                 new_char_count=len(self.output_text) - stop_check_offset,
