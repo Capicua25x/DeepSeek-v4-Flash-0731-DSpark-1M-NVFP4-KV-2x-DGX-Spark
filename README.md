@@ -99,13 +99,29 @@ therefore measures **steps/s, not tokens/s**, and under-reports by the acceptanc
 vs 60.1 tok/s on the identical request. Read `usage.completion_tokens`, or divide server-side
 `vllm:generation_tokens_total` by wall time.
 
-**`k` is still 5.** `dspark_block_size = 5` in the 0731 checkpoint exactly as in the preview.
-DeepSeek's 0731 model card recommends `num_speculative_tokens: 7`; that does not work here. The
-boot-time divisibility guard can be patched out, but the run then fails on first generation
-because the drafter emits exactly `dspark_block_size` tokens per pass and multi-block drafting is
-not implemented — the same reason `k=10` boots and then crashes. `k=7` is fine on drafters that
-are natively deeper (MiMo-V2.5 DFlash, GLM-5.2's DSpark speculator, Inkling); DeepSeek-V4-Flash is
-not one of them.
+**`k` is still 5 on this runtime — and that is a property of the runtime, not the checkpoint.**
+`dspark_block_size = 5` in the 0731 checkpoint exactly as in the preview, and DeepSeek's model
+card recommends `num_speculative_tokens: 7`.
+
+On **this recipe's image** (vLLM `0.21.1rc1.dev339+g1967a5627bc3` + B12X), k=7 does not work.
+`SpeculativeConfig.hf_config_override` has a DSpark branch that sets `n_predict =
+dspark_block_size = 5`, so the divisibility guard rejects it at boot. Patch that guard out and the
+run crashes on the first generation with `The size of tensor a (7) must match the size of tensor b
+(5)` — the draft model hardcodes its block width to `dspark_block_size`, so `propose()` returns 5
+columns however large `k` is. `k=10` fails the same way. The accurate rule **on this image** is
+`k <= 5`, or a multiple of 5.
+
+On the **anemll 0.25.2 lineage** (`ghcr.io/anemll/dspark-vllm-gx10:0.1.1`, vLLM
+`0.25.2.dev0+g752a3a504`) neither failure occurs. That build has no DSpark branch in
+`hf_config_override`, so `n_predict` resolves to `num_nextn_predict_layers` = **1** and the guard
+is inert; and its `DSparkSpeculator` sizes the draft block from `num_speculative_tokens` rather
+than `dspark_block_size`, so a 7-wide draft is simply a wider single block. k=7 boots and
+generates there — confirmed by @robotnurse in #22 with per-position acceptance for positions 0-6.
+Corollary on that image: omit `num_speculative_tokens` and you get k=1, not k=5.
+
+Deeper drafts are still not the missing speed on either runtime: positions 4-5 accept at
+0.078/0.047 on hard content here, and #22 measured k=5 → k=7 buying +3.3% tokens/step for a 33%
+wider verify batch.
 
 ### Ruled out by measurement, so you don't repeat it
 
@@ -385,6 +401,51 @@ Capture runtime evidence before and after any fix:
 scripts/capture_runtime.sh runtime-before-change
 scripts/capture_runtime.sh runtime-after-change
 ```
+
+## Reasoning / thinking mode
+
+Reasoning is **off by default** in this recipe (`--default-chat-template-kwargs '{"thinking":false}'`).
+Everything below was measured on this stack; several of these have cost people real time.
+
+**The response field is `reasoning`, not `reasoning_content`.**
+Non-streaming: `choices[0].message.reasoning`. Streaming: `choices[0].delta.reasoning`.
+There is **no** `reasoning_content` key in a response on this runtime — it is deprecated and only
+accepted on *input*. Clients reading `reasoning_content` see empty and conclude reasoning
+extraction is broken. Credit @vinicius-symetrix (PR #13) for independently reporting the
+streaming half of this.
+
+**`<think>` is written into the prompt, not generated.**
+
+```
+thinking off →  ...<｜Assistant｜></think>
+thinking on  →  ...<｜Assistant｜><think>
+```
+
+So in thinking mode the model's output *starts* with reasoning text and ends with `</think>`;
+there is no opening tag in the completion. **A missing `<think>` in the output is correct
+behaviour.** If you see `</think>` inside `content`, your server is missing
+`--reasoning-parser deepseek_v4` and `--reasoning-config`.
+
+**Enabling it.** Per request: `chat_template_kwargs: {"thinking": true}`, or a top-level
+`reasoning_effort` of `low`/`high`/`max`. Server-wide:
+`--default-chat-template-kwargs '{"thinking":true}'`.
+
+**Never send `reasoning_effort: "none"` together with `thinking: true`.** `"none"` forces
+chat-mode formatting while the reasoning parser stays armed for thinking; with no `</think>`
+in the output the parser puts the *entire* response into `reasoning` and returns
+`content: null`. Measured 4/4 — real `completion_tokens`, `finish_reason: stop`, empty content.
+`reasoning_effort` on its own is fine.
+
+**`reasoning_effort: "low"` behaves as `"high"` on the stock build** — only `"max"`/`"xhigh"`
+differ. See PR #17.
+
+**With `--tokenizer-mode deepseek_v4`, a `chat_template.jinja` in the model directory is
+ignored** — prompt formatting comes from the checkpoint's built-in encoder, not a Jinja
+template. This is why the HuggingFace discussion #26 workaround has no effect here.
+
+**Thinking mode needs output budget.** Reasoning consumes `max_tokens` before any content is
+produced, so a small cap yields `finish_reason: length` with empty `content`. If you benchmark
+thinking mode at a low cap you will measure truncation, not the model.
 
 ## Benchmarks
 
