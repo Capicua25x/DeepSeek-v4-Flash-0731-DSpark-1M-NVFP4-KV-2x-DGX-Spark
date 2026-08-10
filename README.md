@@ -71,6 +71,22 @@ Measured on 2× DGX Spark (GB10), TP=2, k=5, `unsloth/DeepSeek-V4-Flash-0731`:
 The single residual null is mechanism (B) in [#18](../../issues/18) — a marginal-stability
 reasoning runaway, unrelated to stop strings. Patch 5 does not address it.
 
+## Patch 5 and issue #18 (B): the runaway becomes *more* visible, not less
+
+Worth stating so nobody reads it as a regression. Mechanism (B) is a reasoning runaway in
+which `</think>` never arrives. Because Patch 5 keeps stops dormant until the end marker
+appears, a request in that state now has stops dormant for its whole life and runs to
+`max_tokens` — where previously a client stop string could cut it short by accident.
+
+That is correct by design: a stop string was never meant to bound reasoning, and a run
+truncated by one was returning `content: null` anyway. But the practical effect is that
+(B) shows up as a full-budget request after this patch instead of a short one, so a fleet
+that applies Patch 5 may see *reported* token usage on those requests rise. The failure
+rate does not change; only how long each failure takes to admit it.
+
+If you are measuring (B), note that stop strings are no longer a confound in either
+direction, which is the point.
+
 Apply **[Patch 4](patches/0004-dspark-shared-expert-gate-up-proj.patch)** on top of your existing
 setup. Two lines, no rebuild — bind-mount it read-only:
 
