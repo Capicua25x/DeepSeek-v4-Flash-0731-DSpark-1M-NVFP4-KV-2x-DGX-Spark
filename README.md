@@ -33,6 +33,60 @@ silently drops twelve tensors, and 0731 is far more sensitive to the loss than t
 
 ### What to change
 
+## Patch 5 — stop strings must not fire inside the reasoning segment
+
+If you serve this model with a harness that sends `stop` sequences (lm-evaluation-harness
+sends `stop[:4]` on **every** request), you are almost certainly losing answers silently.
+
+vLLM's v1 detokenizer matches client stop strings against the whole output stream. With
+think-in-prompt templates, generation starts *inside* `<think>`, and chain-of-thought
+naturally restates phrases like `Question:`. The stop fires mid-reasoning, `</think>`
+never arrives, and the reasoning parser returns `content: null`. The request looks like a
+model failure; it is a serving-layer one. Hosted deployments of the same checkpoint are
+immune because they scope stops to content.
+
+Apply **[Patch 5](patches/0005-suppress-stops-in-reasoning.patch)** — bind-mount, no rebuild:
+
+```bash
+-v /path/to/patched/detokenizer.py:/opt/env/lib/python3.12/site-packages/vllm/v1/engine/detokenizer.py:ro
+```
+
+> **Both nodes.** `start-deepseek-v4-flash-dspark.sh` syncs the compose and env files to the
+> worker but **not** bind-mounted patch files. The file must exist at the same path on the
+> worker too, or it silently runs unpatched and you get confusing half-fixed results.
+
+Guard is per-request and needs no configuration: if the request's last prompt token is
+`<think>`, stop strings stay dormant until `</think>` appears. EOS and `max_tokens` are
+unaffected; non-thinking requests are untouched. Opt out with
+`VLLM_SUPPRESS_STOPS_IN_REASONING=0`.
+
+Measured on 2× DGX Spark (GB10), TP=2, k=5, `unsloth/DeepSeek-V4-Flash-0731`:
+
+| metric | before | after |
+|---|---|---|
+| decapitation reproducer (seed + stop) | 43 tok, `content: null` | 344 tok, correct answer |
+| stop honored on a non-thinking request | ✓ | ✓ (cuts at exact stop) |
+| GSM8K n=50, temp 0.6 / top_p 0.95 | 8–15 nulls, 0.66–0.84 | **1 null, 0.98** |
+
+The single residual null is mechanism (B) in [#18](../../issues/18) — a marginal-stability
+reasoning runaway, unrelated to stop strings. Patch 5 does not address it.
+
+## Patch 5 and issue #18 (B): the runaway becomes *more* visible, not less
+
+Worth stating so nobody reads it as a regression. Mechanism (B) is a reasoning runaway in
+which `</think>` never arrives. Because Patch 5 keeps stops dormant until the end marker
+appears, a request in that state now has stops dormant for its whole life and runs to
+`max_tokens` — where previously a client stop string could cut it short by accident.
+
+That is correct by design: a stop string was never meant to bound reasoning, and a run
+truncated by one was returning `content: null` anyway. But the practical effect is that
+(B) shows up as a full-budget request after this patch instead of a short one, so a fleet
+that applies Patch 5 may see *reported* token usage on those requests rise. The failure
+rate does not change; only how long each failure takes to admit it.
+
+If you are measuring (B), note that stop strings are no longer a confound in either
+direction, which is the point.
+
 Apply **[Patch 4](patches/0004-dspark-shared-expert-gate-up-proj.patch)** on top of your existing
 setup. Two lines, no rebuild — bind-mount it read-only:
 
@@ -277,6 +331,7 @@ image, same patches, same `k=5`, same `nvfp4_ds_mla` KV cache, same 1M context, 
 | Safety refusals | stock | removed (reported 32/32 bypass on a hard refusal suite) |
 | DSpark MTP draft modules | stock | **stock, unedited** |
 | Patch 4 | required | required |
+| Patch 5 | recommended (any stop-sending harness) | recommended |
 | On-disk | ~156 GB | ~156 GB |
 
 **Getting the uncensored weights:**
