@@ -29,6 +29,11 @@ hosted deployment, protocol v3 (`reasoning_effort: max`, temp 0.6 / top_p 0.95, 
 You do NOT need to re-buy this card. It is a property of the checkpoint. Your local
 runs compare against it directly.
 
+The card also carries reference-only rows the run script does not reproduce (GSM8K,
+AA-LCR, HLE, SciCode, LiveCodeBench, Terminal-Bench-hard, τ²-telecom) — each with its
+harness, protocol, and caveats spelled out in the card's `notes`. Treat those as
+context, not as parity targets.
+
 ## Run it
 
 ```bash

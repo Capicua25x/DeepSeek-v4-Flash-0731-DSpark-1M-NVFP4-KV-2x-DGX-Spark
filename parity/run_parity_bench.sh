@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Campaña AA-Index Tier A: {mmlu_pro, aime25, ifeval} × 3 seeds × 1 endpoint.
-# Uso: run_campaign.sh <endpoint-name> <base_url> [api_key]
+# Parity bench Tier A: {mmlu_pro, aime25, ifeval} x 3 seeds x 1 endpoint.
+# Usage: run_parity_bench.sh <endpoint-name> <base_url> [api_key]
 set -u
 EP="$1"; URL="$2"; KEY="${3:-}"
 OUT="${PARITY_OUT:-./parity-results}"; mkdir -p "$OUT"
