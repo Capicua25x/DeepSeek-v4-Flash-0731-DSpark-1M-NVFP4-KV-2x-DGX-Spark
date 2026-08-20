@@ -156,6 +156,21 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 NCCL_NET=IB  NCCL_IB_DISABLE=0  NCCL_IB_HCA=rocep1s0f0  NCCL_SOCKET_IFNAME=enp1s0f0np0
 NCCL_IB_GID_INDEX=3  NCCL_CROSS_NIC=1  NCCL_CUMEM_ENABLE=0  NCCL_IGNORE_CPU_AFFINITY=1
 NCCL_DEBUG=WARN  NCCL_NVLS_ENABLE=0
+```
+
+> **Dual-HCA note (direct QSFP pairs):** the GB10 QSFP port is TWO virtual NICs
+> (2x PCIe x4). With only one configured, NCCL runs at ~half the port: measured
+> 98 Gb/s single vs **161 Gb/s** with both HCAs listed and `NCCL_IB_MERGE_NICS=1`
+> (+64% busbw, nccl-tests). Both interfaces need an IP (separate subnets) and MTU
+> 9000; map names with `ibdev2netdev`; confirm GID 3 is RoCE v2 via
+> `/sys/class/infiniband/<hca>/ports/1/gid_attrs/types/3`. Two related traps:
+> pre-2026-04 BIOS wires the second controller at Gen5 x2 (half bandwidth -
+> update via `fwupdmgr` first), and GB10 has no GPUDirect RDMA (GDR 0), which is
+> the remaining decode ceiling. On a switched fabric (like the CRS812 setup
+> above) the second NIC may be deliberately unused - this note is for
+> back-to-back QSFP pairs chasing interconnect-bound decode.
+
+```
 HF_HUB_OFFLINE=1  TRANSFORMERS_OFFLINE=1  HF_HUB_DISABLE_XET=1  HF_HOME=/cache/huggingface  VLLM_CACHE_ROOT=/cache/huggingface/vllm-cache
 ```
 
