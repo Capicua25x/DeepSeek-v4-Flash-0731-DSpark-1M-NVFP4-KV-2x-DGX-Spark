@@ -14,8 +14,18 @@ WHAT IT MEASURES
   novelty(window) = fraction of word 8-grams in this window that have not
                     appeared anywhere earlier in the same trace.
 
-  A healthy trace keeps novelty high to the end. A looping trace collapses and
-  never recovers.
+  Windows are taken over the WORD SEQUENCE (700 words per window), not the raw
+  character stream. Char-stream windows truncate tokens at every boundary; for
+  short-period verbatim loops the 1-2 novel boundary fragments dominate the
+  window's small distinct-shingle population and hold novelty above threshold
+  -- a one-sentence verbatim loop (CJK or English) can plateau near 40% novelty
+  and read as HEAVY TAIL forever. Tokenize once, window over words.
+
+  A healthy trace keeps novelty high to the end. A looping trace collapses AND
+  NEVER RECOVERS -- and the verdict enforces both halves: after onset, novelty
+  must stay below threshold to the end of the trace. A collapse that recovers
+  (a long verbatim re-quote of an earlier code block, say) is reported as
+  transient repetition, not as a loop.
 
 WHY NOT BLOCK UNIQUENESS
 
@@ -40,6 +50,18 @@ CALIBRATION
   novelty collapses at token ~7.9k / ~13.8k / ~29.7k and never recovers --
   afterwards it oscillates between 0 and 0.6%, never above. It does not sit at
   exactly zero, so do not test for `== 0`; the threshold below is 2%.
+  Re-verified after the switch to word-sequence windows: onsets ~7.2k / ~13.7k
+  / ~30.2k (each within one window of the char-stream calibration), and two
+  genuine long heavy-tail controls -- real length-capped-but-healthy traces of
+  ~31k and ~34k tokens -- never trip the threshold in any window.
+
+KNOWN LIMITATIONS
+
+  A FRAGMENTED loop -- recycled fragments interleaved with enough novel filler
+  that no single window's novelty drops below threshold -- is not detected
+  (reported by @brianmswheart on the PR thread; real traces exist). That shape
+  needs a cumulative recycled-mass tier, not a window verdict; out of scope
+  here, deliberately, so this tool stays a one-screen instrument.
 
 USAGE
 
@@ -52,35 +74,54 @@ import re
 import sys
 import zlib
 
-WINDOW = 4000       # characters per window
+WINDOW_WORDS = 700  # words per window (~4k chars of English prose)
 THRESHOLD = 0.02    # novelty below this counts as exhausted
 CONSECUTIVE = 3     # windows in a row before calling it a loop
 CHARS_PER_TOKEN = 4.0   # rough; only used to report a token index
 
 
 def analyse(text: str):
+    """One row per word-window: (char_pos, novelty, compression_ratio)."""
+    words = [(m.start(), m.group().lower()) for m in re.finditer(r"\w+", text)]
     seen: set = set()
     rows = []
-    for pos in range(0, len(text), WINDOW):
-        w = text[pos:pos + WINDOW]
-        if len(w) < WINDOW // 2:
+    for i in range(0, len(words), WINDOW_WORDS):
+        chunk = words[i:i + WINDOW_WORDS]
+        if len(chunk) < WINDOW_WORDS // 2:
             break
-        words = re.findall(r"\w+", w.lower())
-        shingles = {tuple(words[i:i + 8]) for i in range(max(0, len(words) - 7))}
-        novelty = len(shingles - seen) / len(shingles) if shingles else 0.0
+        toks = [w for _, w in chunk]
+        shingles = {tuple(toks[j:j + 8]) for j in range(max(0, len(toks) - 7))}
+        novelty = len(shingles - seen) / len(shingles) if shingles else 1.0
         seen |= shingles
-        compression = len(zlib.compress(w.encode(), 6)) / max(1, len(w.encode()))
+        pos = chunk[0][0]
+        end = chunk[-1][0] + len(chunk[-1][1])
+        seg = text[pos:end].encode()
+        compression = len(zlib.compress(seg, 6)) / max(1, len(seg))
         rows.append((pos, novelty, compression))
     return rows
 
 
 def verdict(rows):
+    """(loop_onset_char_pos or None, [transient (start,end) char spans]).
+
+    A loop verdict requires the collapse to PERSIST to the end of the trace:
+    CONSECUTIVE dry windows open a candidate onset, and any later window back
+    above threshold cancels it and records the span as transient repetition.
+    """
     dry = 0
-    for pos, novelty, _ in rows:
-        dry = dry + 1 if novelty < THRESHOLD else 0
-        if dry >= CONSECUTIVE:
-            return pos - WINDOW * (CONSECUTIVE - 1)
-    return None
+    onset_idx = None
+    transients = []
+    for i, (pos, novelty, _) in enumerate(rows):
+        if novelty < THRESHOLD:
+            dry += 1
+            if dry == CONSECUTIVE and onset_idx is None:
+                onset_idx = i - (CONSECUTIVE - 1)  # first of the dry windows
+        else:
+            if onset_idx is not None:
+                transients.append((rows[onset_idx][0], pos))
+                onset_idx = None
+            dry = 0
+    return (rows[onset_idx][0] if onset_idx is not None else None), transients
 
 
 def report(name: str, text: str) -> None:
@@ -88,19 +129,23 @@ def report(name: str, text: str) -> None:
     if not rows:
         print(f"{name}: too short to judge ({len(text)} chars)")
         return
-    onset = verdict(rows)
+    onset, transients = verdict(rows)
     print(f"\n== {name}  ({len(text):,} chars, ~{int(len(text)/CHARS_PER_TOKEN):,} tokens)")
     print(f"   {'tok~':>9}  {'novelty':>7}  {'compress':>8}")
     step = max(1, len(rows) // 12)
     for pos, novelty, comp in rows[::step]:
         print(f"   {int(pos/CHARS_PER_TOKEN):>9,}  {novelty:>7.2%}  {comp:>8.3f}")
+    for a, b in transients:
+        print(f"   -- transient repetition: novelty collapsed at ~token "
+              f"{int(a/CHARS_PER_TOKEN):,} and recovered by ~{int(b/CHARS_PER_TOKEN):,}; "
+              f"not a loop.")
     if onset is None:
-        print("   -> HEAVY TAIL: novelty never collapses. The model is still "
-              "producing new material; raise max_tokens.")
+        print("   -> HEAVY TAIL: novelty never collapses for good. The model is "
+              "still producing new material; raise max_tokens.")
     else:
         tail = [n for p, n, _ in rows if p >= onset]
         print(f"   -> LOOP from token ~{int(onset/CHARS_PER_TOKEN):,} "
-              f"(novelty stays below {max(tail):.2%} thereafter). "
+              f"(novelty stays below {max(tail):.2%} to the end of the trace). "
               f"Raising max_tokens will not help.")
 
 
