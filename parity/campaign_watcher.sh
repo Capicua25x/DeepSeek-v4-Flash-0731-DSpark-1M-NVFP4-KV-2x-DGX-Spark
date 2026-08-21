@@ -12,8 +12,11 @@ while :; do
   if [ "$done_count" -ge "$EXPECTED_DONE" ]; then
     echo "CAMPAIGN COMPLETE: $done_count/$EXPECTED_DONE runs"; exit 0
   fi
-  if [ $(( $(date +%s) - t0 )) -gt 32400 ]; then
-    echo "TIMEOUT 9h with $done_count/$EXPECTED_DONE"; exit 2
+  # mmlu_pro is 1120 items/run at --limit 80 (14 subtasks), so a healthy
+  # campaign runs far past 9h at c6 — default sized to the real workload,
+  # env-tunable for faster endpoints (review #34, item 3).
+  if [ $(( $(date +%s) - t0 )) -gt "${WATCH_TIMEOUT_SEC:-129600}" ]; then
+    echo "TIMEOUT $(( ${WATCH_TIMEOUT_SEC:-129600} / 3600 ))h with $done_count/$EXPECTED_DONE"; exit 2
   fi
   procs=$(pgrep -fc "[l]m_eval --model" || true)
   if [ "${procs:-0}" -lt 1 ]; then
@@ -22,7 +25,9 @@ while :; do
   fi
   for f in "$OUT"/*.log; do
     [ -f "$f" ] || continue
-    errs=$(grep -cE "HTTP Error 4|HTTP Error 5|Traceback|ConnectionError" "$f")
+    # "API request failed" is 0.4.12's async-path failure log line — without it
+    # an endpoint dying mid-run waited for the 15-min stall check (review #34, item 3).
+    errs=$(grep -cE "HTTP Error 4|HTTP Error 5|Traceback|ConnectionError|API request failed" "$f")
     if [ "$errs" -gt 40 ]; then
       echo "FAILURE: $(basename $f) accumulated $errs errors"; tail -5 "$f"; exit 1
     fi

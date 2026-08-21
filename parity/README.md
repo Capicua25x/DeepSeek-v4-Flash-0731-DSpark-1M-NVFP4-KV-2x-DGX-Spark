@@ -1,7 +1,6 @@
 # Parity Bench — verify your deployment actually matches the model
 
-This folder lets any deployment of this recipe answer, in ~1-2 hours of wall clock and
-with hard numbers: **"is my local serving faithful to DeepSeek-V4-Flash-0731, or is my
+This folder lets any deployment of this recipe answer, with hard numbers: **"is my local serving faithful to DeepSeek-V4-Flash-0731, or is my
 stack silently costing me intelligence?"**
 
 ## Why this exists
@@ -22,9 +21,18 @@ hosted deployment, protocol v3 (`reasoning_effort: max`, temp 0.6 / top_p 0.95, 
 | Benchmark | Median | Runs |
 |---|---|---|
 | IFEval (80) | **0.938** | 0.900 / 0.938 / 0.938 |
-| MMLU-Pro (80) | **0.837** | 0.826 / 0.837 / 0.841 |
+| MMLU-Pro (1120)¹ | **0.837** | 0.826 / 0.837 / 0.841 |
 | GPQA Diamond (60) | **0.733** | 0.667 / 0.733 / 0.767 |
 | AIME 2025 (30) | **0.700** | 0.700 / 0.700 / 0.733 |
+
+¹ `--limit 80` is per-subtask; MMLU-Pro is a 14-subtask group, so n=1120. This also
+sizes the wall clock: the full 3-seed campaign is a **multi-hour / overnight** affair
+at typical local throughput, not a lunch break. GPQA Diamond appears in this table as
+reference context but is not run by the script (the HF dataset is gated and needs
+authenticated access); the machine-readable `parity_targets` list in the card says
+which rows the script reproduces. The card's run-to-run spread reflects server-side
+nondeterminism — the hosted runs' request-level seed was constant (see the card's
+`seed_note`); local runs now pass real per-run seeds.
 
 You do NOT need to re-buy this card. It is a property of the checkpoint. Your local
 runs compare against it directly.
@@ -37,9 +45,13 @@ context, not as parity targets.
 ## Run it
 
 ```bash
-pip install "lm-eval[api]" langdetect immutabledict   # once
-./run_parity_bench.sh mybox "http://localhost:8888/v1/chat/completions" ""
+pip install "lm-eval[api]==0.4.12" langdetect immutabledict   # once (pinned: the JSON gen_kwargs form and log sentinels are version-coupled)
+PARITY_API_KEY="" ./run_parity_bench.sh mybox "http://localhost:8888/v1/chat/completions"
 # results land in ./parity-results/<run>/, resumable via .done markers
+# (the key travels via env, not argv — argv is visible in `ps`)
+# The script first fingerprints whether your endpoint renders reasoning_effort
+# (1-token probe) and refuses to start if it doesn't — stock vLLM silently
+# ignores the field, and a no-effort campaign is not card-comparable.
 ```
 
 Three seeds per benchmark; compare your medians to the card. Interpretation:
@@ -49,7 +61,7 @@ Three seeds per benchmark; compare your medians to the card. Interpretation:
   in the run logs first (`grep -c "null content" *.log`).
 - **High nulls** → truncation (raise `max_gen_toks`) or the stop-string bug (see below).
 
-## Traps this harness already avoids (learned the hard way)
+## Traps (learned the hard way) — 1, 2 and 4 are enforced by the harness; 3 and 5 are documented so you can check for them
 
 1. **Stop-strings inside reasoning** — think-in-prompt models restate phrases like
    "Question:" while reasoning; serving stacks that match client stop-strings in the

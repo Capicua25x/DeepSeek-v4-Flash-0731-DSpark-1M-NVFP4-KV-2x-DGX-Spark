@@ -34,6 +34,24 @@
    "lcb_codegen": 175,
    "tb_hard": 44,
    "tau2_telecom": 114
+  },
+  "limits_note": "--limit is per-subtask in lm-eval: mmlu_pro (14 subtasks) at --limit 80 is n=1120 total. All other tasks are single-task (limit = n).",
+  "effective_n": {
+   "mmlu_pro": 1120,
+   "aime25": 30,
+   "ifeval": 80,
+   "gpqa_diamond_cot_zeroshot": 60,
+   "gsm8k": 50
+  },
+  "seed_note": "The three hosted runs were launched with --seed only, which in lm-eval 0.4.12 seeds python/numpy/torch/fewshot but NOT the request payload (that is the --model_args seed, which defaulted to 1234 for all runs). The run-to-run spread in this card therefore reflects server-side nondeterminism, not sampler seeds. run_parity_bench.sh now passes seed into --model_args, so local runs ARE seed-independent samples.",
+  "effort_render_fingerprint": {
+   "method": "1-token request, prompt_tokens readback: bare vs reasoning_effort=max",
+   "reference_deltas": {
+    "none": 0,
+    "high": 79,
+    "max": 92
+   },
+   "hosted_card_value": "not captured at card freeze (2026-08-05) — a deviation from this card can be card-side if the hosted backend rendered a different preamble; any card revision must capture it. run_parity_bench.sh now records the local value in parity-results/effort_fingerprint.txt and aborts on delta 0 (stock vLLM ignores reasoning_effort entirely)."
   }
  },
  "metric_keys": {
@@ -153,5 +171,11 @@
   "lcb_codegen": "official LiveCodeBench harness @28fef95, code_generation_lite v6 (175 problems, window 2025-01→2025-04 — most recent published; predates the 0731 checkpoint, contamination not ruled out); breakdown easy 43/43, medium 38/52, hard 18/80; 82/175 hit the 30K cap (68 with no extractable code → 0) — the hard split is budget-limited at effort=max, not purely capability-limited",
   "tb_hard": "AA-hard subset, 44 tasks @74221fb (42 scored; not run: ['polyglot-rust-c', 'write-compressor']); 1 repetition; uniform 3600s timeout (AA uses per-task defaults + global 24h + 1M-input/rep budget — not enforced by harness 0.2.18); default Terminus-2 scaffold; token counters at 0 (harness bug), estimated cost $4-8; comparable in spirit, not citable as AA methodology",
   "tau2_telecom": "114/114, tau2-bench v1.0.1 telecom base split, 1 trial; DS4 agent (temp 0.6, 30K, no stops), user-sim gpt-5.6-luna temp 0.0 (hosted aggregator); verified: 209/209 env assertions, 516/516 action checks, 1894 agent + 2553 sim calls with real metadata, user_stop termination on all; cost $4.35. PERFECT > published SOTA — read with caution: n=1, compliant sim at temp 0, generous max_steps 200, upstream base split; comparable in spirit, not citable as AA methodology"
- }
+ },
+ "parity_targets": [
+  "mmlu_pro",
+  "aime25",
+  "ifeval"
+ ],
+ "non_targets_note": "Rows outside parity_targets are reference context only (different harnesses/costs; see notes) — they are not reproduced by run_parity_bench.sh."
 }
